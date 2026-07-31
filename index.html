@@ -7,7 +7,7 @@
 <meta name="description" content="Uy Web Studio's new site is taking shape. Say hello at hi@uyweb.studio.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&family=Dancing+Script:wght@700&family=Playfair+Display:wght@700&family=UnifrakturCook:wght@700&display=swap" rel="stylesheet">
 <style>
   :root{
     --font-heading:'Archivo Black', sans-serif;
@@ -198,6 +198,51 @@
     display:inline-block;
     white-space:nowrap;
     max-width:none;
+    height:calc(clamp(1.8rem, 5vw, 2.5rem) * 1.05);
+    line-height:calc(clamp(1.8rem, 5vw, 2.5rem) * 1.05);
+    overflow:visible;
+    /* An inline-block's baseline (used to align it against the <br> and
+       "Taking"/"Shape." below) is normally the baseline of its own last
+       line of content — which is font-specific, so without this the
+       cycling styles below would shift h1's overall height by a couple
+       px per style even with the fixed box height above. vertical-
+       align:top removes that dependency, aligning by the box's own top
+       edge instead. */
+    vertical-align:top;
+    /* Positioning context for the glitch bands below. */
+    position:relative;
+    --glitch1-clip:inset(50% 0 50% 0);
+    --glitch1-x:0px;
+    --glitch1-opacity:0;
+    --glitch2-clip:inset(50% 0 50% 0);
+    --glitch2-x:0px;
+    --glitch2-opacity:0;
+  }
+  /* Two duplicate copies of the current word — content:attr() rather
+     than a hardcoded string, since (unlike the 404 page's "404") this
+     word actually changes — each clipped to an independently-randomized
+     horizontal band and shifted sideways, see the JS glitch loop in
+     handleScrollTick. Layered over the real text, they read as sectors
+     of the glyphs tearing out of sync with their neighbors while scroll
+     input is active, settling back to nothing (opacity 0) once it stops.
+     data-glitch-text is kept in sync with whatever word is currently
+     flickering, so a band never shows a DIFFERENT word than the base
+     text underneath it. */
+  #hero-word::before, #hero-word::after{
+    content:attr(data-glitch-text);
+    position:absolute; left:0; top:0; width:100%; height:100%;
+    color:inherit;
+    pointer-events:none;
+  }
+  #hero-word::before{
+    clip-path:var(--glitch1-clip);
+    transform:translateX(var(--glitch1-x));
+    opacity:var(--glitch1-opacity);
+  }
+  #hero-word::after{
+    clip-path:var(--glitch2-clip);
+    transform:translateX(var(--glitch2-x));
+    opacity:var(--glitch2-opacity);
   }
   .sub{
     font-family:var(--font-body);
@@ -233,6 +278,15 @@
      at a wider viewport than before. */
   @media (max-width:768px){
     #hint{white-space:normal; max-width:80vw; line-height:1.6}
+  }
+  /* On very short viewports (e.g. a phone in landscape) there simply
+     isn't room for hint + kicker + logo + the bottom text block all at
+     once without them fighting over the same space no matter how the
+     others are shifted — hiding this purely-decorative line is the
+     pragmatic fix, freeing enough height for everything that actually
+     matters (the logo, the pitch, the contact link) to fit cleanly. */
+  @media (max-height:450px){
+    #hint{display:none}
   }
 
   /* ── THEME TRANSITION EFFECTS ──
@@ -366,7 +420,7 @@
 <div class="kicker"><div class="kicker-mask"><div class="kicker-track" id="kicker-track"></div></div></div>
 
 <main class="overlay">
-  <h1><span id="hero-word">Somethings</span><br>Taking<br>Shape.</h1>
+  <h1><span id="hero-word" data-glitch-text="Somethings">Somethings</span><br>Taking<br>Shape.</h1>
   <p class="sub">We're building the new home for Uy Web Studio. In the meantime, drop into our orbit, and say hello.</p>
   <a class="contact" href="mailto:hi@uyweb.studio">hi@uyweb.studio</a>
 </main>
@@ -669,6 +723,70 @@ const LOGO_HOVER_DIP = 10 * worldUnitsPerPixel;
 const logoCenterEl = document.querySelector('.logo-center');
 logoCenterEl.addEventListener('mouseenter', () => { logoHovered = true; });
 logoCenterEl.addEventListener('mouseleave', () => { logoHovered = false; });
+
+// ── DYNAMIC LOGO/KICKER CLEARANCE ─────────────────────────────────────
+// .overlay (h1 + .sub + .contact) bottom-anchors and grows upward with
+// its content — tall enough, on short/narrow viewports, to reach up into
+// the logo/wordmark's default (screen-centered) position. The logo and
+// wordmark are Three.js objects positioned in world space
+// (iconCenterY/wordmarkCenterY, computed once assuming vertical
+// screen-center), entirely independent of their invisible DOM stand-in's
+// CSS position — a CSS-only fix wouldn't move what's actually rendered.
+// So instead: measure h1's REAL rendered top edge and the wordmark's
+// REAL projected screen position every time, and shift the whole logo
+// group (world-space Y, so icon and wordmark move together) up by
+// exactly however much they'd otherwise overlap — zero overlap anywhere
+// means zero shift, so this works continuously across every viewport
+// size rather than snapping at a hardcoded breakpoint. The kicker (a
+// real DOM element) then sits a fixed buffer above wherever the icon's
+// (possibly now-shifted) top edge ends up, clamped so it never rises
+// into #hint (fixed, never moves) on very short viewports.
+let logoShiftWorld = 0;
+const LOGO_CLEARANCE_PX = 36;
+const KICKER_CLEARANCE_PX = 24;
+const MIN_ICON_TOP_PX = 8;
+const kickerEl = document.querySelector('.kicker');
+const hintEl = document.getElementById('hint');
+function updateLogoClearance() {
+  const viewportH = window.innerHeight;
+  const pxPerWorldUnit = viewportH / (2 * worldHalfHeight);
+  const contentTop = document.querySelector('h1').getBoundingClientRect().top;
+
+  const wordmarkBottomWorld = wordmarkCenterY - wordmarkH / 2;
+  const wordmarkBottomScreenY = viewportH / 2 - wordmarkBottomWorld * pxPerWorldUnit;
+  let shiftPx = Math.max(0, (wordmarkBottomScreenY + LOGO_CLEARANCE_PX) - contentTop);
+
+  // On very short viewports there isn't enough total room to fully clear
+  // h1 without pushing the icon off the top of the screen — cap the
+  // shift so the icon's own top edge never rises above a small safe
+  // margin, accepting reduced (or zero) clearance from h1 in that
+  // extreme case rather than clipping the logo itself.
+  const iconTopScreenYUnshifted = viewportH / 2 - (iconCenterY + iconH / 2) * pxPerWorldUnit;
+  shiftPx = Math.min(shiftPx, Math.max(0, iconTopScreenYUnshifted - MIN_ICON_TOP_PX));
+  logoShiftWorld = shiftPx / pxPerWorldUnit;
+
+  if (!logoIconBusy) logoIconGroup.position.y = iconCenterY + logoShiftWorld;
+  logoWordmarkGroup.position.y = wordmarkCenterY + logoShiftWorld;
+
+  // Keep the invisible DOM hit-box (click-to-toggle, hover-dip detection)
+  // aligned with where the 3D content actually renders now.
+  const logoCenterTopPx = viewportH / 2 - logoShiftWorld * pxPerWorldUnit;
+  logoCenterEl.style.top = `${(logoCenterTopPx / viewportH) * 100}%`;
+
+  const iconTopWorld = iconCenterY + logoShiftWorld + iconH / 2;
+  const iconTopScreenY = viewportH / 2 - iconTopWorld * pxPerWorldUnit;
+  const kickerHeight = kickerEl.getBoundingClientRect().height;
+  const hintBottom = hintEl.getBoundingClientRect().bottom;
+  const kickerCenterY = Math.max(
+    iconTopScreenY - KICKER_CLEARANCE_PX - kickerHeight / 2,
+    hintBottom + KICKER_CLEARANCE_PX + kickerHeight / 2,
+  );
+  kickerEl.style.top = `${(kickerCenterY / viewportH) * 100}%`;
+}
+updateLogoClearance();
+window.addEventListener('resize', updateLogoClearance);
+// (re-run together with updateOverlayTextMaxWidth once fonts load — see
+// the document.fonts.ready block near the bottom of the script)
 
 // An orbit is a true 3D ellipse defined by two perpendicular vectors —
 // majorAxis (the longer one) and minorAxis — rather than a fixed radius
@@ -1526,16 +1644,68 @@ const VELOCITY_BOOST = 1.5;
 const VELOCITY_MAX = 10;
 const VELOCITY_DECAY_TAU = 1.5; // seconds — roughly how long "slowly" takes
 
-// The h1's subject word cycles one step per wheel event, in scroll
-// direction — same discrete, per-event granularity as the velocity
-// boost above, not a per-frame animation.
+// The h1's subject word AND its typeface both cycle one step per wheel
+// event, in scroll direction — same discrete, per-event granularity as
+// the velocity boost above, not a per-frame animation. The two lists
+// aren't the same length, so which word lands on which style keeps
+// varying rather than repeating the same pairing every full cycle.
+// 21 words, 5 styles — 21 isn't a multiple of 5 (deliberately: if the
+// style count were a factor of the word count, the same word would
+// always land on the same style every time it comes back around. Keep
+// this true if either list is ever resized.
 const HERO_WORDS = [
   'Somethings', 'Arts', 'Experience', 'Visions', 'Voices',
   'Spaces', 'Cultures', 'Ideas', 'Stories',
   'Journeys', 'Moments', 'Joy', 'Wonder', 'Intrigue', 'Discovery',
+  'Craft', 'Affirmations', 'Connections', 'Resilience', 'Beauty', 'Lore',
+];
+const HERO_STYLES = [
+  { fontFamily: 'var(--font-heading)' }, // default — Archivo Black
+  { fontFamily: "'Dancing Script', cursive" },
+  { fontFamily: 'var(--font-mono)' }, // Space Mono
+  { fontFamily: "'Playfair Display', serif" },
+  { fontFamily: "'UnifrakturCook', cursive" }, // blackletter, just for the flourish
 ];
 let heroWordIndex = 0;
+let heroStyleIndex = 0;
 const heroWordEl = document.getElementById('hero-word');
+
+// While scroll input keeps arriving, the word AND its font-family both
+// flicker randomly, and two duplicate layers (see #hero-word::before/
+// ::after) each clip to an independently-randomized horizontal band and
+// shift sideways — sectors of the glyphs tearing out of sync with their
+// neighbors, same idea as screen tearing — rather than snapping straight
+// to the next target word/style. Once input stops for GLITCH_SETTLE_MS,
+// the bands clear and it settles on the real targets (heroWordIndex/
+// heroStyleIndex, still advanced on every tick same as before — the
+// glitch is purely visual noise on top, it doesn't touch the underlying
+// indices). glitchTimer restarts settleTimer on every tick so settling
+// only ever fires after a genuine pause.
+const GLITCH_FRAME_MS = 65;
+const GLITCH_SETTLE_MS = 180;
+let glitchTimer = null;
+let settleTimer = null;
+
+function randomizeGlitchBand(n) {
+  const top = Math.random() * 65; // % from the top the band starts
+  const height = 12 + Math.random() * 30; // % tall
+  const sign = Math.random() < 0.5 ? -1 : 1;
+  const offsetPx = sign * (10 + Math.random() * 22); // sideways tear distance — never near-zero, always a clear displacement
+  const visible = Math.random() < 0.85; // mostly on, brief dropouts rather than mostly off
+  heroWordEl.style.setProperty(`--glitch${n}-clip`, `inset(${top}% 0 ${100 - top - height}% 0)`);
+  heroWordEl.style.setProperty(`--glitch${n}-x`, `${offsetPx}px`);
+  heroWordEl.style.setProperty(`--glitch${n}-opacity`, visible ? '1' : '0');
+}
+
+function settleHeroStyle() {
+  clearInterval(glitchTimer);
+  glitchTimer = null;
+  heroWordEl.style.setProperty('--glitch1-opacity', '0');
+  heroWordEl.style.setProperty('--glitch2-opacity', '0');
+  heroWordEl.textContent = HERO_WORDS[heroWordIndex];
+  heroWordEl.dataset.glitchText = HERO_WORDS[heroWordIndex];
+  heroWordEl.style.fontFamily = HERO_STYLES[heroStyleIndex].fontFamily;
+}
 
 // Shared by both the wheel listener and the touch-swipe listener below —
 // one "tick" of scroll signal, direction-aware, regardless of input type.
@@ -1543,7 +1713,21 @@ function handleScrollTick(direction) {
   scrollDirection = direction;
   velocityMultiplier = Math.min(VELOCITY_MAX, velocityMultiplier * VELOCITY_BOOST);
   heroWordIndex = (heroWordIndex + direction + HERO_WORDS.length) % HERO_WORDS.length;
-  heroWordEl.textContent = HERO_WORDS[heroWordIndex];
+  heroStyleIndex = (heroStyleIndex + direction + HERO_STYLES.length) % HERO_STYLES.length;
+
+  if (!glitchTimer) {
+    glitchTimer = setInterval(() => {
+      const flickerWord = HERO_WORDS[Math.floor(Math.random() * HERO_WORDS.length)];
+      const flickerStyle = HERO_STYLES[Math.floor(Math.random() * HERO_STYLES.length)];
+      heroWordEl.textContent = flickerWord;
+      heroWordEl.dataset.glitchText = flickerWord;
+      heroWordEl.style.fontFamily = flickerStyle.fontFamily;
+      randomizeGlitchBand(1);
+      randomizeGlitchBand(2);
+    }, GLITCH_FRAME_MS);
+  }
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(settleHeroStyle, GLITCH_SETTLE_MS);
 }
 
 window.addEventListener('wheel', (e) => {
@@ -1599,27 +1783,52 @@ const MARQUEE_BASE_SPEED = 22; // px/sec, idle drift
 
 // ── OVERLAY TEXT WIDTH ───────────────────────────────────────────────
 // The text column under the marquee (h1 + .sub) is normalized to the
-// rendered width of the LONGEST word HERO_WORDS ever cycles the h1's
-// subject through — not just whichever one currently shows — so the
-// column stays a stable width as the word changes on scroll, rather than
-// reflowing every time. Measured live via a hidden probe styled with
-// h1's own computed font, since h1's font-size is a responsive clamp(),
-// not a fixed value a ch unit could track consistently across viewport
-// sizes.
+// widest combination of word × style HERO_WORDS/HERO_STYLES ever cycles
+// the h1's subject through — not just whichever one currently shows —
+// so the column stays a stable width as it changes on scroll, rather
+// than reflowing every time. "Taking"/"Shape." (fixed, always the
+// default style) are measured too, same reasoning as the 404 page's
+// version of this function: a line that can't wrap just overflows a
+// too-narrow box rather than actually growing it. Measured live via a
+// hidden probe styled with h1's own computed font, since h1's font-size
+// is a responsive clamp(), not a fixed value a ch unit could track
+// consistently across viewport sizes.
 function updateOverlayTextMaxWidth() {
   const probe = document.createElement('span');
   probe.style.cssText = 'position:fixed; visibility:hidden; white-space:nowrap;';
   probe.style.font = getComputedStyle(document.querySelector('h1')).font;
   document.body.appendChild(probe);
-  const width = HERO_WORDS.reduce((max, word) => {
+  let width = 0;
+  HERO_WORDS.forEach(word => {
+    HERO_STYLES.forEach(style => {
+      probe.style.fontFamily = style.fontFamily;
+      probe.textContent = word;
+      width = Math.max(width, probe.getBoundingClientRect().width);
+    });
+  });
+  probe.style.fontFamily = ''; // back to h1's default for the fixed lines
+  ['Taking', 'Shape.'].forEach(word => {
     probe.textContent = word;
-    return Math.max(max, probe.getBoundingClientRect().width);
-  }, 0);
+    width = Math.max(width, probe.getBoundingClientRect().width);
+  });
   document.body.removeChild(probe);
   root.style.setProperty('--overlay-text-max-width', `${width}px`);
 }
 updateOverlayTextMaxWidth();
 window.addEventListener('resize', updateOverlayTextMaxWidth);
+
+// Both this and updateLogoClearance (see LOGO 3D setup) run synchronously
+// very early — before the page's Google Fonts have actually swapped in
+// (document.fonts.status is still "loading" at that point). Measuring
+// against fallback-font metrics under-shoots real ones enough that h1's
+// true widest word and its true rendered position were both wrong,
+// re-opening the exact overlap these two functions exist to prevent.
+// Re-running both, in this order, once the real fonts are actually in
+// gets it right.
+document.fonts.ready.then(() => {
+  updateOverlayTextMaxWidth();
+  updateLogoClearance();
+});
 
 // ── ANIMATION LOOP ───────────────────────────────────────────────────
 const clock = new THREE.Clock();
@@ -1660,7 +1869,7 @@ function animate() {
   // Logo icon hover dip — suspended while sink/rise (logoIconBusy) owns
   // logoIconGroup's position instead.
   if (!logoIconBusy) {
-    const dipTarget = logoHovered ? iconCenterY - LOGO_HOVER_DIP : iconCenterY;
+    const dipTarget = logoHovered ? iconCenterY + logoShiftWorld - LOGO_HOVER_DIP : iconCenterY + logoShiftWorld;
     logoIconGroup.position.y += (dipTarget - logoIconGroup.position.y) * Math.min(1, dt / 0.09);
   }
 
