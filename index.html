@@ -1,0 +1,1729 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Uy Web Studio — Coming Soon</title>
+<meta name="description" content="Uy Web Studio's new site is taking shape. Say hello at hi@uyweb.studio.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --font-heading:'Archivo Black', sans-serif;
+    --font-body:'Inter', sans-serif;
+    --font-mono:'Space Mono', monospace;
+
+    /* dark-surface defaults (data-theme="dark") */
+    --bg:#1c1a16;
+    --ink:#f4efe6;
+    --muted:rgba(244,239,230,0.55);
+    --hint:rgba(244,239,230,0.55);
+    --teal:#6bb3ac;
+    --glow:#fbd93c;
+    --kicker-bg:transparent;
+    --kicker-border:transparent;
+    --kicker-text:#f7801e;
+    --kicker-width:min(90vw, 460px);
+  }
+  html[data-theme="light"]{
+    --bg:#f4efe6;
+    --ink:#1c1a16;
+    --muted:rgba(28,26,22,0.6);
+    --hint:rgba(28,26,22,0.62);
+    --teal:#3b6e6a;
+    --glow:#f7801e;
+    --kicker-bg:#fbd93c;
+    --kicker-border:#000;
+    --kicker-text:#000;
+    --kicker-width:100vw;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;overflow:hidden}
+  body{
+    font-family:var(--font-body);
+    background:var(--bg);
+    color:var(--ink);
+    transition:background-color .725s ease, color .725s ease;
+  }
+  canvas{display:block; touch-action:none}
+
+  #scene{position:fixed; inset:0; z-index:0}
+
+  /* ── LOGO: icon "sun" above a static wordmark "horizon" ── */
+  .logo-center{
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:clamp(210px, 28vw, 360px);
+    z-index:5; pointer-events:auto; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  /* The icon's actual visual now lives in the Three.js scene (see LOGO 3D
+     setup) so orbiting solids can occlude/be occluded by it via real
+     depth — this box (and its hidden <img> children below) only still
+     exists to size .logo-center's layout/hit-box exactly as before and
+     to give the texture loader a source to read .src from. */
+  .logo-icon{
+    position:relative; width:70.9%; aspect-ratio:212/100;
+    visibility:hidden;
+  }
+  .logo-icon-hover img{position:absolute; inset:0; width:100%; height:100%}
+
+  /* A soft radial haze behind the logo — ambient light, not an outline.
+     No hard edges anywhere in it, so nothing for overflow/clipping to cut
+     into a visible box. */
+  .logo-ambient{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:190%; aspect-ratio:1/1; border-radius:50%;
+    background:radial-gradient(circle, var(--glow), transparent 70%);
+    filter:blur(12px);
+    opacity:0;
+    transition:opacity .58s ease;
+    pointer-events:none;
+  }
+  .logo-center:hover .logo-ambient{opacity:.4}
+
+  /* Same deal as .logo-icon above — the visible wordmark is a Three.js
+     plane now; this box only stays around to host #giant-wordmark-stack
+     (which positions itself relative to it) and to source textures from
+     its hidden <img> children. */
+  .logo-wordmark{
+    position:relative; width:100%; aspect-ratio:299/34; margin-top:.5rem;
+  }
+  .logo-wordmark img{position:absolute; inset:0; width:100%; height:100%; visibility:hidden}
+
+  /* A stack of large echoes of the wordmark — rows built dynamically (see
+     buildGiantWordmarkRows) to cover the full viewport height, all
+     centered on the same point as the real wordmark. Each row blips in
+     at 90% opacity (no fade-in) then slowly fades out while drifting;
+     alternating rows drift opposite directions. Deliberately overflows
+     the viewport; html/body's own overflow:hidden keeps that from ever
+     producing a scrollbar. */
+  #giant-wordmark-stack{ pointer-events:none; }
+  .giant-wordmark-row{
+    position:absolute; top:50%; left:50%;
+    width:max-content;
+    font-family:var(--font-heading); font-weight:900;
+    font-size:18vw; line-height:1; white-space:nowrap;
+    color:var(--ink);
+    opacity:0; pointer-events:none;
+    transition:opacity 2.5s ease, transform 2.5s ease;
+  }
+
+  .overlay{
+    position:fixed; inset:0; z-index:10;
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
+    pointer-events:none; padding:0 6vw 9vh; text-align:center;
+  }
+
+  /* Page-load ceremony: everything except the giant-wordmark overlay
+     starts blurred and invisible — pure CSS, so it's already the state
+     at first paint, no JS needed to avoid a flash of sharp content —
+     then resolves into focus once playLoadCeremony flips data-loaded.
+     The transition has to live in an unconditional rule (not bundled
+     into the :not() one below) so it's still active at the moment the
+     attribute flips and the blurred values stop applying — otherwise
+     the change would just snap instantly with nothing to animate it. */
+  #scene, .overlay, .logo-center{
+    transition:filter 2.1s ease, opacity 2.1s ease;
+  }
+  :root:not([data-loaded]) #scene,
+  :root:not([data-loaded]) .overlay,
+  :root:not([data-loaded]) .logo-center,
+  :root:not([data-loaded]) .kicker{
+    filter:blur(34px); opacity:0;
+  }
+  :root:not([data-loaded]) .logo-center{ pointer-events:none; }
+
+  /* Light mode's chip (background + border) needs a crisp, unbroken
+     edge — but the scrolling text still needs its edges masked to a
+     fade. Splitting those into .kicker (the chip) and .kicker-mask (the
+     fade + clip) keeps the border from getting faded out along with the
+     text at the left/right ends. */
+  /* Pulled out of .overlay's bottom-anchored flex flow so it can live at
+     a fixed point of its own — the top third of the viewport — instead
+     of stacking above h1 wherever that group happens to land. z-index 26
+     is above #grain (25), the only other layer that actually spans the
+     marquee's screen area. */
+  .kicker{
+    position:fixed; top:33vh; left:50%; transform:translate(-50%,-50%);
+    z-index:26; pointer-events:none;
+    width:var(--kicker-width);
+    padding:.3rem .6rem;
+    background:var(--kicker-bg);
+    border:1px solid var(--kicker-border);
+    /* filter/opacity here (not in the shared #scene/.overlay/.logo-center
+       rule) so this one transition declaration covers everything .kicker
+       needs — a second, separate transition value at equal specificity
+       would just override this one wholesale for those properties,
+       leaving them un-animated during the page-load ceremony. */
+    transition:background .58s ease, border-color .58s ease, width .58s ease,
+      filter 2.1s ease, opacity 2.1s ease;
+  }
+  .kicker-mask{
+    overflow:hidden;
+    -webkit-mask-image:linear-gradient(to right, transparent, black 12%, black 88%, transparent);
+    mask-image:linear-gradient(to right, transparent, black 12%, black 88%, transparent);
+  }
+  .kicker-track{
+    display:inline-block; white-space:nowrap;
+    font-family:var(--font-mono); font-size:.95rem; letter-spacing:.32em; text-transform:uppercase;
+    color:var(--kicker-text);
+    transition:color .58s ease;
+    will-change:transform;
+  }
+  /* Both normalized to the same width — the rendered width of "Something's"
+     (the h1's own widest word) — rather than independent ch-based
+     guesses; see updateOverlayTextMaxWidth, which measures it live since
+     h1's font-size is a responsive clamp(), not a fixed value a ch unit
+     could approximate consistently. */
+  h1{
+    font-family:var(--font-heading);
+    /* Capped lower than before (was 3.4rem) — h1 is 3 lines now (the
+       cycling word, "Taking", "Shape."), so its max size had to come down
+       to keep the block from growing tall enough on large screens to
+       overlap the wordmark logo above it. */
+    font-size:clamp(1.8rem, 5vw, 2.5rem);
+    line-height:1.05;
+    max-width:var(--overlay-text-max-width, 16ch);
+    color:var(--ink);
+    transition:color .725s ease;
+  }
+  /* The cycling word is exempt from the column width above — some words
+     in HERO_WORDS could still run wider than it despite the longest-word
+     measurement (e.g. right as the viewport resizes, before it's
+     recomputed), and it must never wrap onto a second line. nowrap plus
+     the h1's own default (visible) overflow lets it spill past the
+     column edge instead, rather than wrapping or getting clipped. */
+  #hero-word{
+    display:inline-block;
+    white-space:nowrap;
+    max-width:none;
+  }
+  .sub{
+    font-family:var(--font-body);
+    font-size:clamp(.95rem, 1.6vw, 1rem);
+    color:var(--muted);
+    max-width:var(--overlay-text-max-width, 38ch);
+    margin:1.3rem 0 1.6rem;
+    line-height:1.55;
+    transition:color .725s ease;
+  }
+  .contact{
+    pointer-events:auto;
+    font-family:var(--font-body);
+    font-weight:600;
+    font-size:clamp(.95rem, 1.6vw, 1.1rem);
+    color:var(--teal);
+    text-decoration:none;
+    border-bottom:1px solid currentColor;
+    padding-bottom:2px;
+    transition:color .725s ease, opacity .29s ease;
+  }
+  .contact:hover{opacity:.75}
+
+  #hint{
+    position:fixed; top:1.75rem; left:50%; transform:translateX(-50%);
+    font-family:var(--font-mono); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--hint); z-index:20; pointer-events:none; transition:color .725s ease;
+    text-align:center; white-space:nowrap;
+  }
+
+  /* Widened from the old 520px — the hint text is longer now (three
+     phrases instead of one short line), so nowrap starts risking overflow
+     at a wider viewport than before. */
+  @media (max-width:768px){
+    #hint{white-space:normal; max-width:80vw; line-height:1.6}
+  }
+
+  /* ── THEME TRANSITION EFFECTS ──
+     z-index sits below .logo-center (5) so both ripples emanate from
+     behind the logo rather than washing over it. */
+  #fx-sonar{position:fixed; inset:0; z-index:3; pointer-events:none}
+  .sonar-ring{
+    position:fixed; top:50%; left:50%; width:100vmax; height:100vmax;
+    border-radius:50%; border:2px solid var(--ink);
+    transform:translate(-50%,-50%) scale(0); opacity:0; pointer-events:none;
+  }
+  /* Behind the canvas (0), not above it — it's the background itself
+     being painted, not a layer covering the solids. */
+  #fx-paint{
+    position:fixed; inset:0; z-index:-1; pointer-events:none;
+    clip-path:circle(0% at 50% 50%);
+  }
+
+  /* ── GRAIN ── oversized so a mouse-driven shift never exposes an edge. */
+  #grain{
+    position:fixed; top:-8%; left:-8%; width:116%; height:116%;
+    z-index:25; pointer-events:none;
+    background:#000;
+    filter:url(#grain-filter);
+    mix-blend-mode:overlay;
+    opacity:.05;
+    transition:transform .29s ease-out;
+    will-change:transform;
+  }
+
+  /* Traces the dark reveal's growing blob boundary. Two separate paths —
+     stroking the fill path would also outline the rect it's built from
+     (the viewport edge), so the fill (solid black outside the blob, an
+     evenodd hole punched at the blob itself) and the glowing neon-yellow
+     outline (just the blob's own contour, no rect) are drawn separately.
+     Sits below the logo (5) and text (10), which have their own
+     clip-paths already and should never be covered by this. */
+  #fx-stroke{
+    position:fixed; inset:0; width:100%; height:100%;
+    z-index:4; pointer-events:none;
+  }
+  #fx-stroke-fill{
+    fill:#1c1a16;
+  }
+  #fx-stroke-line{
+    fill:none;
+    stroke:#f5ff2e;
+    stroke-width:3;
+    filter:drop-shadow(0 0 4px #f5ff2e) drop-shadow(0 0 12px #f5ff2e);
+    transition:opacity .58s ease;
+  }
+
+  /* Light's reveal-blob outline — thick and flatly solid, no glow, as
+     the opposite of dark's thinner neon line. */
+  #fx-reveal-line{
+    fill:none;
+    stroke:#f5ff2e;
+    stroke-width:10;
+    transition:opacity .58s ease;
+  }
+
+  /* Debugging aid only — steps the dark/light transition phase by phase.
+     Hidden for now; gating itself is also disabled in JS (see debugGate). */
+  #debug-controls{
+    display:none;
+    position:fixed; bottom:1.5rem; left:1.5rem; z-index:100;
+    align-items:center; gap:.75rem;
+  }
+  #debug-proceed{
+    width:48px; height:48px; border-radius:50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.75); color:#f5ff2e;
+    border:2px solid #f5ff2e; font-size:16px; line-height:1;
+    cursor:pointer; pointer-events:auto;
+    box-shadow:0 0 12px rgba(245,255,46,0.5);
+  }
+  #debug-proceed:hover{ background:rgba(0,0,0,0.9); }
+  #debug-proceed:active{ transform:scale(0.92); }
+  #debug-phase-label{
+    font-family:var(--font-mono); font-size:.7rem; letter-spacing:.05em;
+    color:#f5ff2e; background:rgba(0,0,0,0.75); border:1px solid #f5ff2e;
+    padding:.35rem .6rem; border-radius:4px; white-space:nowrap;
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="grain-filter">
+    <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch" result="noise"/>
+    <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.6 0.6 0.6 0 0"/>
+  </filter>
+</svg>
+<div id="grain"></div>
+
+<svg id="fx-stroke" aria-hidden="true">
+  <path id="fx-stroke-fill" fill-rule="evenodd" />
+  <path id="fx-stroke-line" />
+  <path id="fx-reveal-line" />
+</svg>
+
+<div id="scene"></div>
+
+<div class="logo-center">
+  <div class="logo-ambient"></div>
+  <div class="logo-icon">
+    <div class="logo-icon-inner" id="logo-icon-inner">
+      <div class="logo-icon-hover">
+      <img class="primary" src="data:image/png;base64,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" alt="">
+      <img class="reversed" src="data:image/png;base64,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" alt="">
+      </div>
+    </div>
+  </div>
+  <div class="logo-wordmark">
+    <img class="primary" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASsAAAAiCAYAAAAH3P/IAAAQ1ElEQVR4nO2deVRUR/bHv49GQTYbaETpRgSRrYEGZEtOZlTccd8QFTcQIYoiYybHmDHuMYnjrlEMbnFfojGu0dHguIuKKDsoCgjSNMJhMSDLmz/4YUBedb/uBml+vs85/NHvVt263e/VfVW3bhVUeXEeODg4ODQdrbY2gIODg4MNnLPi4OBoF3DOioODo13AOSsODo52AeesODg42gXaJMGvp3+jFy3+hlE2eNBAbNqwliLV3bBpKx29M4ZRFjZ7FqIiIygACPs8gr723xtE41Yu/wYTxo8ltvPN0hX0sRMnGWX6+vo4d+bkwa7m5kHEBhqxM2Y3vX7DZkaZjbU1zp891cSO9PQMeuSYCYzldXQ64sG9W5S29l8/b2VlJdx6+9JM5fX09BB35zrF4/Hk/u7KMnLEMPzw3ep3dr98mXen/yB/H1V0aWtrw9q6B1ycxRgzeiS8PHsT74uqlJWVu589d/5hWnoGXr7MQ15eHl7m5cNMIIBIJIRQaAEb6x4YNWpEpKmJCePNun3nLj0zJKylTcPB/XvQ28OdAj5M33inz38k/eJFtkL7BKamMDMTwMKiGxwdHeAmcYWvj3eTZ5DE92vX03v2/swoi5gTjoi54QrvNU3TiH+UQMfHJyA5JQXZ2TmQyYogKyqCsTEfZmZmEFpYQOzkAInEFV6enhSPp9xYSfE3aUVWLPtm94hR44JLy8oY5Rs3bYX/0MFW+vr6L96XpaalEx0VAERFRoCtowIAdzcJUfYsKwtlZeXuhoYG8Q3XklNSiOWrqt4iJTWNdnEWv7vJSckpjI6qoW0ej8fW1DahpqYGGRmZyMjIxMlTpzFiuD+9ZvUKVp1BEalp6fTefftx8eIlVFZVNZPn5OYiJzf33ed1GzZvGtDfb1PwjKmQSFxb3Gm2R2RF9Y4hJTUNV67GAgBMTUzosWNGYe6ccEpXV6dV2q2trUPM7j30iROnmtyjxkilhZBKC5GUlIxLl/8DABAIBPT4caPxeVgopaPDzrY2nQaam3cJWfiPSKK86PVrbN224zmTbOWqNcR6EokrpkwOVOohdnVxpjp06ECUP0lMetj4c0pqmlx9iYlJTT6npWUQy7q7kx2lpnLm7Hn8e91GogNmy724+3Tg5Gn49fQZRkfFRG1tLX6/dBlB00PwR+w1tW34/0rR69f4adceBE6eSufmvnzS0vql0sLNM4JD6Q0btxAdFQmZTIYd0TEICAyin2VlsbqHbR6zmhgwnvLs7UGU7z94GNk5OU1+id/OnKMfPIxnLN+hQwesXrEUFKXcC1dHRwdubq5EeVJycpPPycmpcvU9ec9ZpaaRnZuHm5tiAzWQ/QcP48WLbOZhMQvuxd2nZ4dHoLKyUqX61dXVmL/gC85hKSA1LR2h4XOdS0tL+7SUztKyMt9ZYXPmxd1/oJaetPQMBIeEIz8//7yism3urABg9cpl5bqEoWBNTQ1Wrf5O2PC5srISGzdvJeoKDZkJW9ueKk0N3CXkEU5Kyl/Oqa6uDo+fyH9RJSY1dW5p6cwjKx6PB4nEpQd7K1sHbW1tfPqJT7M/0n0B6kc4V67+YaBqm9/9sE6ho3J0sEf37pZEeXV1NZYuX6WqCR8NWVnPsXzlt7Etpe9fS5bfTic808ryqqAA8yIXDqVp+e+cNo1ZNWBl1d1w7txwet36TYzy/16/iat/xNJ+/fpSO3bG0Hl5+YzlrK17IDxslsoxDHnTscbOJzPzKV1V9VaurvT0DJSXV9gZGOin19XVITWVeSTmLHYCU0yOCR9vL8ydwz54bGJiwrqsoaEBdsdEN/vtiotLgqbOCNmfmfmUsZ5UWsi6jcZUVVVB3sP+5RdRGD9uTF8jI6NrACCTyZbNi1y4NP5RAqMNL1/m3REKLXxFImHG/HlzejHprK2pxbbt0cQ2Pw8PBSkUYNGt6wX53+jDs3rlMlhailBXV4f8/FdISk7BocNHUVdXx1j+3PmLmD9vrsyqu6VAnXZTUtPohtgTE1paWpg0cQLEYid06WKGoqLXyMx8ip8PHASp3yQmJePK1Vh6QP9+xP6rEc4KAIJnTKcuXPidTk5h7tTf/bAOtrY9c0mrFgCwYukSdOzYUWUb3N0kAQCOMcmys3PeBdnlBdcb8/hJYtqnn/hQGZmZROcmL7D/Pnw+H95enh80oGxszD/g7dWb6KyMjfkq6c3MfErX1NQQ5X79+tINjgoABALBsqApgYzOCgBSUtN8hEILWIpEdnPCZzOWqaqqwrbt0cTXd2jITDM9PT0Z6y/Rxjg5OcLRwf7d8zBm9EgMHOBHB88KR21tLWOdX0//Zho5b65a7R49doIo09XRwa6YHe9WThszevRIOnhWGAoKpIx1Dx05igH9+xF1a8Q0EAB4PC18u3oFcVUsOzsHkyZPF5I6feDECfDyUm85nc/nH3ewtyPKEx4/fggoDq438CQxEQCQmppOLOOmhLNqKyoq3hBlNjbWKuk0MDAolycPmDSV+n7tevpJYhLdMFIY5j+USk16xPgn7438MeHj7UVNCgwgyuPi1IsxAcDNm7eJspDgGYyOCgB62lhTUZERcm37888/O5HkGuOsAMDB3o6aFTKTKC96/ZrxeldzcyyMiiRH6ZXAw8ONKEtKrh9RMY3+uls2j6skJdWXJ8WrAMCzt/tyJU38oDx//qLu8n+uMsqEQgv49eurkpMQiUSG8lZfS0tLsWfvz5gwcQo+/ZsfPXfeAvrHHTvpGzdv0RUVFVaqtPmxMHjQAKLs/VVqZSktK/OVt/I3csQwuS+hEcOHE9Ndqqurkfn0GfHNqDHTwAYi5oRRV67+QZOmHUx8tegLNM6BUgeJqysOHWacCb5bAXz/7aSvr49x40Zjw8YtTa4/SqifsqSlMY+srK17QCAQLGNr2++XLsNB7KZw5cvYmI/bN2KVciLFxSWsdDfQ1dwcP27dqHJ+GI+nhYDxY3Hw8FGFZUtKSnDlauy7/CEej/fcw8MNE8aNxfBhQyktLY1657Y5Vt27bwEwj0lWWVWFN2/eCFSd7kqlhcRhlba2NkQikaG8+jyeFmxsrInxSpmMbJbG3eUOHTpg9cplrMv36fM3DB40sMWmAL093BNJsuTkFGRkZDbr0C7OYkhcXZqVl0oLkZ+ffz6FEFz3cHdTw9K2Y/SoEfj15NEAezs7tX73hf+INHN0sFe6Xm1tLeLiHuDLRV9j8tSZ9PupLR87nTsbzZcnL5QVyc+7kYM8Z8Ln88EmK92YzyfKCgvbkbMCAImrCzVlcqDCckaGhli+9F8HW7JtkUjoIhRaMMpycnNx4+atZtfFYkc4i8WMve7S5atDX78uZtSnTHBdkygokOJe3H3m4acS6OnpyX7eu8ujz98/U1nHo0cJmDZ9lrC8vIIcbORoQnV1tamqdevqWjelrVrOootKzkpRPgQUyVmwMGq+mUgklFsmasE8pbbUsEXeiOfwkePNrjmLxTAw0E+3t2u+Yn74KLlPu7fTkdXtO3cxf8EXiFr4JV3FMuuchKGhQXz09q3UiWOHMGXSRNja9lRax6uCAkTvjGG36tHKfIi+oYjS0jLy9g4A/M5GKsdJOxuRZ3klJSWorWVOm2hMcUkJUcbv3JkoI8asOnUiBuVRVFQk15gCKfPSJADo6ZH1Ni2nJ4uYEwbShlEba2sETpzQKitAEokrzpxlTqjNzslpds3Z2SkDAMRip2bB9OfPmVOoBAIBetpYa8wKlq6uLmaHBje7XiQrwukzZ1FeXtFMduHiJUgkrvSMaUFqfw9nsRPlLHYCAOTl5V+5GnvN7/r1G7h77z6rDPf3k3Bbk7buG4rIyc1dJE9uamq6TFXdfD7/LgDGzfA1NTXIzc0ts7LqTvRotbV1ePYsi6jfxMSYKCM6KxNjckLh02dZqKyshK6ubjMZTdNyHxyBKfsRKJ9PNtzExFjpLTVs8VAy98lSJLID6kdYJ0+dZlVPlf2Ainb0q0OnTrqYEz6bUfeI4f504JTpjPWOH/8FM6YpP7iNvXadJuWrzZgWZBY0OVAWNDkQb9++xaOEx3TC4yfYt+8AZARnwPQSaS00oW/I49q160SZvV0vtfqNhUU3X2NjPl1cXMIoP3P2vEHE3HBi/TNnzxLz67S0tODk6DCMVJforGxte04FsJ9JVlJSgi3bttP/XBjV7FsfOnJM7kper162RJmm4OBgTxkZGdGlpaUKyzaeMjo7O7Fuw11C3oeoaYgsRYsBfMske/4iGzU1NVD29IX4RwkgHZXi7eVZ6NnbgwKAjh07wtvLk/L28oTA1JT+6mvmkXYXMzOl2lcHTe4bBQXSXYePkEMPn332qVr6KYpCf79+OPHLKUZ5zK498PX1phvuX2Oysp7TGzaRt8r5+nihc+fOxD2CxCfM2Jh/wN1Nsp+UMbxr9z6kpWXQAwf4QSQSIj//FW7euo0LFy8RjTE25qPxsSmaipaWFtzdXCHvrK0GGjsoJ0cHSkeno8KtOIBq8aqSkhLci7vPOuih07Gj2keoyIqKvtq8eRujowLqV+aqqqqstLW1WW0ZaqBbV3OibMWqNVjy9SK68ZlZ6ekZtLxRq7OzWJnm1UJT+kZycgrKysrohu026ekZOHr8F7x5Q07iHT1yhDJNMBIwYRzRWVVWVWHajFmYNHECrcx2m3q94+W2K/d1OCkwAKQbAgA3bt5iXB0j6psY0GpTt5bG3c2NnbMS/+WstLW1IXZywsP4R3Lr6OnpwdXFWekf4u69ONy9F8e6vJVVd/x+/jdWZZXNs2rA3LwL672NjRkwwG/xilVrvmXax5aenoGp00MAgLU9qqRAqIMm9I2vlyxTqvww/yHo1ctW7Q7o6uJMDRo4gLg/sK6ujlX+3Hs6MWSw/BQkuauBI0cMo/r2+btSjZJwsLfD7NDg9uGpALnHxTTGw929SS9hMxWUuLpo/GF7bBkyeKBK9QSmpmvGjhnVIjZIXF0wdMggvRZRxpL21jd69LDC0iWL+7aUvlUrl35ix7D6rQpdzc2xacNahRvFFaYubFy/lurv11ctY1ycxdgVsyOSKeioqbi7SeQexgfUZ6AbGOg3SU8XOyl2VmwdoaZjamKCGdOCVD6NYEFkxGKxmH2cjwlr6x6I3r4loFOnTn+qpUgF2kvfcHJ0QEz0j4mNN4ari5Gh4Z2Y6B+3eHn1VktPr1622BWzA926dfNXVFahs9LV1cG2LRupvbt3wtvLUylD7Ox6Yd3aNTh6eD9FOjNbU9HR0YGLgjgIk9zFRXHspL0mgzZGJBJi44a1rB4yEgJT0zXHjxyg1v/7e/j166tUkN7I0BDTp03B7p+2X+Dz+c2T3z4Amt43TE1MEBoyE4cO7KNEImHzLRZq0qWL2fy9u36iohbMg6VIpFRdgUCA8LBZOHH0IMU2hYf10+Hr4035+ngj9tp1+u7de5AWyiAtlKLglRQF0gIY840hFFpAIBCgSxczuLo4w3/oEKUPhdck3NwkcuNPTk6Oza7ZWFtT+vr6dEVF87wkoP6wvd4e7j1ayMQPiqVIBHv7XujXtw+G+Q+hWmI0oKWlBf+hgyn/oYNRXFwSdO78hf1ZWc9RIJWioECK/FcFePPmDUQiISy6dYPw//4hwvBh/q12rriyaELfEAgEMBOYqvQPI9SBx9NCWGgINXtWMB48jKcTEp602j+MoMqL81rpa3BwcHC0HO132MPBwfFRwTkrDg6OdgHnrDg4ONoFnLPi4OBoF3DOioODo13wP0aKa8q4rkQeAAAAAElFTkSuQmCC" alt="Uy Web Studio">
+    <img class="reversed" src="data:image/png;base64,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" alt="Uy Web Studio">
+    <div id="giant-wordmark-stack" aria-hidden="true"></div>
+  </div>
+</div>
+
+<div id="fx-sonar" aria-hidden="true"></div>
+<div id="fx-paint" aria-hidden="true"></div>
+
+<div id="hint">Try picking up one of the floating shapes · Try pressing the logo · Try scrolling</div>
+
+<div id="debug-controls">
+  <button id="debug-proceed" aria-label="Proceed to next phase" title="Proceed (debug)">▶</button>
+  <span id="debug-phase-label"></span>
+</div>
+
+<div class="kicker"><div class="kicker-mask"><div class="kicker-track" id="kicker-track"></div></div></div>
+
+<main class="overlay">
+  <h1><span id="hero-word">Somethings</span><br>Taking<br>Shape.</h1>
+  <p class="sub">We're building the new home for Uy Web Studio. In the meantime, drop into our orbit, and say hello.</p>
+  <a class="contact" href="mailto:hi@uyweb.studio">hi@uyweb.studio</a>
+</main>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.185.1/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+const root = document.documentElement;
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ── THEME TOKENS ────────────────────────────────────────────────────
+// Mirrors design-system/foundations/colors.html's light/dark accent pairs,
+// plus the mark's own light/dark fill rule from logo-and-motion.html
+// (orange on paper, yellow on ink) applied to the "sun" toggle piece.
+const PRIMARY = { yellow: 0xfbd93c, orange: 0xf7801e };
+const THEME = {
+  dark:  { clear: 0x1c1a16, teal: 0x6bb3ac, rust: 0xe8734a, sun: 0xfbd93c },
+  light: { clear: 0xf4efe6, teal: 0x3b6e6a, rust: 0xc1421a, sun: 0xf7801e },
+};
+const BG_HEX = { dark: '#1c1a16', light: '#f4efe6' };
+const INK_HEX = { dark: '#f4efe6', light: '#1c1a16' };
+const MUTED_HEX = { dark: 'rgba(244,239,230,0.55)', light: 'rgba(28,26,22,0.6)' };
+const HINT_HEX = { dark: 'rgba(244,239,230,0.32)', light: 'rgba(28,26,22,0.38)' };
+const TEAL_HEX = { dark: '#6bb3ac', light: '#3b6e6a' };
+function colorFor(colorKey, themeName) {
+  return colorKey in PRIMARY ? PRIMARY[colorKey] : THEME[themeName][colorKey];
+}
+let theme = 'dark';
+
+// ── SCENE / CAMERA / RENDERER ───────────────────────────────────────
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 95);
+camera.lookAt(0, 0, 0);
+// Fixed camera, no orbit controls — the logo sits at world origin, at the
+// exact center of the frame, and every piece orbits around that point.
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(THEME[theme].clear);
+// Required for any material's own .clippingPlanes to take effect — used
+// by the logo icon's base clip plane (see LOGO 3D setup).
+renderer.localClippingEnabled = true;
+document.getElementById('scene').appendChild(renderer.domElement);
+
+// ── BRAND SHAPES ─────────────────────────────────────────────────────
+// Transparent wireframe solids, one per accent color, each on its own
+// ring around the logo. The arch echoes the logo's icon and doubles as
+// a second control for the day/night transition (see "sun" below).
+function archGeometry() {
+  const points = [];
+  const segments = 14;
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const y = t * 7;
+    const r = 8 * Math.sin((1 - t) * Math.PI * 0.5 + 0.001) + 0.6;
+    points.push(new THREE.Vector2(r, y));
+  }
+  return new THREE.LatheGeometry(points, 40);
+}
+
+// speed: rad/sec (sign sets direction) · spin: own-axis rotation rate,
+// independent of the orbit. Each orbit's actual shape (radius/ry/rz) is
+// randomized per load instead of authored here — see randomOrbitShape.
+const SHAPES = [
+  // colorKey 'sun' (not a fixed PRIMARY hex) so this solid is yellow in
+  // dark mode and orange in light mode, reusing the same THEME.sun pair
+  // the (currently unused) arch toggle piece below is set up for.
+  { geo: () => new THREE.IcosahedronGeometry(8.5, 0), colorKey: 'sun', speed:  0.042, spin: 0.124 },
+  // { geo: () => new THREE.TorusGeometry(6.5, 2.2, 10, 28), colorKey: 'orange', speed: -0.034, spin: 0.097 },
+  { geo: () => new THREE.DodecahedronGeometry(8, 0), colorKey: 'teal', speed:  0.057, spin: 0.152 },
+  { geo: () => new THREE.OctahedronGeometry(9, 0), colorKey: 'rust', speed: -0.038, spin: 0.110 },
+  // { geo: archGeometry, colorKey: 'sun', isToggle: true, speed: -0.026, spin: 0.345 },
+];
+
+const SUN_FILL_OPACITY = 0.22;
+const SUN_EDGE_OPACITY = 1;
+
+const pieces = []; // { mesh, colorKey, isToggle, fillMaterial, edgeMaterial, orbit, dip }
+const pieceMeshes = [];
+
+// Each solid gets its own base-speed multiplier, spread geometrically
+// upward from 1 (not just jittered near it) so the paces read as
+// unmistakably different rather than a subtle variance. 1 is always the
+// SLOWEST multiplier — which solid gets it (and which gets the faster
+// factors) is reshuffled every load.
+const SPEED_SPREAD_RATIO = 1.6; // each step up is ~60% faster than the last
+function buildSpeedFactors(count) {
+  const factors = [];
+  for (let k = 0; k < count; k++) {
+    factors.push(SPEED_SPREAD_RATIO ** k);
+  }
+  for (let i = factors.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [factors[i], factors[j]] = [factors[j], factors[i]];
+  }
+  return factors;
+}
+const speedFactors = buildSpeedFactors(SHAPES.length);
+
+// Bounds the orbit's world-space extent to what's actually visible in the
+// current viewport, at the depth (z=0) the pieces orbit around — derived
+// from the camera's own vertical FOV/distance, the same math the camera
+// itself uses to project world space to screen space. Recomputed once
+// per load from the window size at that moment (not resize-reactive).
+const vFovRad = camera.fov * Math.PI / 180;
+const worldHalfHeight = camera.position.z * Math.tan(vFovRad / 2);
+const worldHalfWidth = worldHalfHeight * (window.innerWidth / window.innerHeight);
+
+// Randomizes one piece's orbit shape (radius = x half-extent, ry/rz =
+// how flattened/tilted the ellipse looks from this fixed camera), capped
+// so the ellipse's horizontal and vertical extents both stay within the
+// viewport (minus meshRadius, so the solid itself doesn't clip the edge).
+const RY_RANGE = [0.35, 0.75];
+const RZ_RANGE = [0.1, 0.25];
+function randomOrbitShape(meshRadius) {
+  const maxRadius = Math.max(6, worldHalfWidth - meshRadius);
+  const maxVerticalExtent = Math.max(4, worldHalfHeight - meshRadius);
+  const ry = RY_RANGE[0] + Math.random() * (RY_RANGE[1] - RY_RANGE[0]);
+  const rz = RZ_RANGE[0] + Math.random() * (RZ_RANGE[1] - RZ_RANGE[0]);
+  const radiusCap = Math.min(maxRadius, maxVerticalExtent / ry);
+  const radiusFloor = radiusCap * 0.55;
+  const radius = radiusFloor + Math.random() * (radiusCap - radiusFloor);
+  return { radius, ry, rz };
+}
+
+SHAPES.forEach((data, i) => {
+  const isToggle = !!data.isToggle;
+  const geometry = data.geo();
+  geometry.computeBoundingSphere();
+  const meshRadius = geometry.boundingSphere.radius;
+
+  const dimFillOpacity = isToggle ? SUN_FILL_OPACITY : 0.07;
+  const fillMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, side: THREE.DoubleSide, depthWrite: false,
+    opacity: dimFillOpacity,
+  });
+  const mesh = new THREE.Mesh(geometry, fillMaterial);
+
+  const edgeMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: isToggle ? SUN_EDGE_OPACITY : 0.85 });
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 1), edgeMaterial);
+  mesh.add(edges);
+
+  mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+  scene.add(mesh);
+
+  const shape = randomOrbitShape(meshRadius);
+  const orbit = {
+    majorAxis: new THREE.Vector3(shape.radius, 0, 0),
+    minorAxis: new THREE.Vector3(0, shape.radius * shape.ry, shape.radius * shape.rz),
+    speed: prefersReducedMotion ? 0 : data.speed * speedFactors[i],
+    spin: prefersReducedMotion ? 0 : data.spin,
+    phase: (i / SHAPES.length) * Math.PI * 2 + Math.random() * 0.5,
+  };
+  // The randomized minor/major length ratio, fixed at creation and never
+  // touched by dragging — see updateOrbitForDrag for why reorientation
+  // reads this instead of recomputing the ratio from the live axes.
+  orbit.eccentricity = Math.sqrt(shape.ry * shape.ry + shape.rz * shape.rz);
+
+  pieces.push({ mesh, colorKey: data.colorKey, isToggle, fillMaterial, edgeMaterial, orbit, dimFillOpacity });
+  pieceMeshes.push(mesh);
+});
+
+// ── LOGO 3D (icon + wordmark rendered as real scene objects) ──────────
+// Moved out of the DOM and into the Three.js scene, positioned at the
+// world origin — the exact point every orbit is centered on — so the
+// GPU's own depth test naturally lets solids occlude the logo (or the
+// logo occlude them) depending on which side of the origin they're
+// currently on. A flat CSS z-index could only ever place solids
+// uniformly above or uniformly below the DOM logo; real depth is the
+// only way to get "sometimes in front, sometimes behind."
+//
+// The original DOM logo markup stays put (see .logo-icon/.logo-wordmark
+// img's visibility:hidden rules) purely as an offscreen source for these
+// textures, and to keep .logo-center's click/hover hit-box exactly the
+// size and position it always was — .logo-ambient's glow and the
+// click-to-toggle listener both keep working unchanged.
+function clampPx(min, preferredVw, max) {
+  return Math.min(Math.max(min, window.innerWidth * preferredVw), max);
+}
+const rootFontSizePx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+const worldUnitsPerPixel = (2 * worldHalfHeight) / window.innerHeight;
+
+// Mirrors .logo-center's own CSS: width clamp(210px,28vw,360px); .logo-icon
+// is 70.9% of that, aspect-ratio 212/100; .logo-wordmark is the full
+// width, aspect 299/34, stacked margin-top:.5rem below the icon.
+const logoCenterWidthPx = clampPx(210, 0.28, 360);
+// The source PNG is actually 212×112 — a bit taller than the 212×100
+// display window — matching the original object-fit:cover;
+// object-position:top by cropping off the bottom of the image (rather
+// than squashing it) instead of showing it in full.
+const ICON_CONTAINER_ASPECT = 212 / 100;
+const ICON_IMAGE_ASPECT = 212 / 112;
+const iconVisibleFraction = ICON_IMAGE_ASPECT / ICON_CONTAINER_ASPECT;
+const iconWidthPx = logoCenterWidthPx * 0.709;
+const iconHeightPx = iconWidthPx / ICON_CONTAINER_ASPECT;
+const wordmarkWidthPx = logoCenterWidthPx;
+const wordmarkHeightPx = wordmarkWidthPx * (34 / 299);
+const logoGapPx = 0.5 * rootFontSizePx;
+
+const iconW = iconWidthPx * worldUnitsPerPixel;
+const iconH = iconHeightPx * worldUnitsPerPixel;
+const wordmarkW = wordmarkWidthPx * worldUnitsPerPixel;
+const wordmarkH = wordmarkHeightPx * worldUnitsPerPixel;
+const logoGapWorld = logoGapPx * worldUnitsPerPixel;
+
+// .logo-center stacked icon above wordmark (flex column), then centered
+// the WHOLE block on the viewport — so individually, the icon sits
+// slightly above world Y=0 and the wordmark slightly below it.
+const logoBlockHeight = iconH + logoGapWorld + wordmarkH;
+const iconCenterY = logoBlockHeight / 2 - iconH / 2;
+const wordmarkCenterY = -(logoBlockHeight / 2 - wordmarkH / 2);
+
+const logoTextureLoader = new THREE.TextureLoader();
+function loadLogoTexture(selector) {
+  const tex = logoTextureLoader.load(document.querySelector(selector).src);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// alphaTest discards the fully-transparent padding around the actual
+// glyph/silhouette entirely (rather than just alpha-blending it), so that
+// padding never writes depth or otherwise interacts with occlusion — a
+// low threshold (not e.g. 0.5) keeps this independent of the crossfade's
+// own animated opacity: a fully-opaque texture pixel times ANY opacity
+// down to ~0.05 still clears it, so it only ever discards texture pixels
+// that are ACTUALLY transparent in the source PNG, never a shape mid-fade.
+function makeLogoPlane(width, height, texture, opacity, depthWrite) {
+  const material = new THREE.MeshBasicMaterial({
+    map: texture, transparent: true, opacity, depthWrite, alphaTest: 0.05, side: THREE.DoubleSide,
+  });
+  return new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+}
+
+const iconTexPrimary = loadLogoTexture('.logo-icon-hover img.primary');
+const iconTexReversed = loadLogoTexture('.logo-icon-hover img.reversed');
+[iconTexPrimary, iconTexReversed].forEach(tex => {
+  tex.repeat.set(1, iconVisibleFraction);
+  tex.offset.set(0, 1 - iconVisibleFraction);
+});
+const wordmarkTexPrimary = loadLogoTexture('.logo-wordmark img.primary');
+const wordmarkTexReversed = loadLogoTexture('.logo-wordmark img.reversed');
+
+// "primary" shows in light theme, "reversed" in dark — matches the
+// original --logo-opacity-primary/reversed convention it replaces.
+//
+// The icon writes real depth (depthWrite:true) so it participates in
+// actual per-pixel occlusion against orbiting solids — solids nearer the
+// camera than the icon's own z correctly draw over it, and solids
+// farther away correctly disappear behind it.
+const iconMeshPrimary = makeLogoPlane(iconW, iconH, iconTexPrimary, theme === 'light' ? 1 : 0, true);
+const iconMeshReversed = makeLogoPlane(iconW, iconH, iconTexReversed, theme === 'dark' ? 1 : 0, true);
+const logoIconGroup = new THREE.Group();
+logoIconGroup.position.set(0, iconCenterY, 0);
+logoIconGroup.add(iconMeshPrimary, iconMeshReversed);
+scene.add(logoIconGroup);
+
+// A fixed world-space horizontal at the icon's own resting base — not
+// attached to logoIconGroup, so it stays put in place while the icon
+// sinks below it. Any portion of either icon mesh that ends up below
+// this line (e.g. mid-sink, or dipping on hover) gets discarded outright
+// rather than just fading, the same "vanishes at its own horizon" effect
+// overflow:hidden gave the old DOM version.
+const iconBaseY = iconCenterY - iconH / 2;
+const iconBaseClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -iconBaseY);
+iconMeshPrimary.material.clippingPlanes = [iconBaseClipPlane];
+iconMeshReversed.material.clippingPlanes = [iconBaseClipPlane];
+
+// The wordmark deliberately does NOT get the same real-depth treatment —
+// it stays depthWrite:false and gets a renderOrder below solids' default
+// (0), so it always draws first and solids always paint over it
+// regardless of actual z, i.e. it's pinned to the back plane rather than
+// participating in front/behind occlusion like the icon does.
+const wordmarkMeshPrimary = makeLogoPlane(wordmarkW, wordmarkH, wordmarkTexPrimary, theme === 'light' ? 1 : 0, false);
+const wordmarkMeshReversed = makeLogoPlane(wordmarkW, wordmarkH, wordmarkTexReversed, theme === 'dark' ? 1 : 0, false);
+wordmarkMeshPrimary.renderOrder = -1;
+wordmarkMeshReversed.renderOrder = -1;
+const logoWordmarkGroup = new THREE.Group();
+logoWordmarkGroup.position.set(0, wordmarkCenterY, 0);
+logoWordmarkGroup.add(wordmarkMeshPrimary, wordmarkMeshReversed);
+scene.add(logoWordmarkGroup);
+
+// Hover dip: a small, independent Y offset applied on top of
+// logoIconGroup's resting position — mirrors the old
+// .logo-icon-hover:hover translateY(10px), but as a per-frame lerp (see
+// animate()) since there's no CSS transition to lean on for a Three.js
+// object. Suspended during the sink/rise tween (logoIconBusy) so the two
+// don't fight over the same position value.
+let logoHovered = false;
+let logoIconBusy = false;
+const LOGO_HOVER_DIP = 10 * worldUnitsPerPixel;
+const logoCenterEl = document.querySelector('.logo-center');
+logoCenterEl.addEventListener('mouseenter', () => { logoHovered = true; });
+logoCenterEl.addEventListener('mouseleave', () => { logoHovered = false; });
+
+// An orbit is a true 3D ellipse defined by two perpendicular vectors —
+// majorAxis (the longer one) and minorAxis — rather than a fixed radius
+// tied to the world X-axis. That's what lets dragging actually reorient
+// the ellipse (see updateOrbitForDrag) instead of only resizing one
+// baked-in orientation.
+function orbitPosition(orbit) {
+  return new THREE.Vector3()
+    .addScaledVector(orbit.majorAxis, Math.cos(orbit.phase))
+    .addScaledVector(orbit.minorAxis, Math.sin(orbit.phase));
+}
+
+// Hover-only: traces a piece's orbit as a dashed ring, sharing the same
+// parametric formula as orbitPosition (just swept over a full circle
+// instead of evaluated at one phase). Its dashes travel along the ring
+// at that piece's own current angular speed — direction and scroll
+// boost included — rather than a fixed animation rate, in the shared
+// per-frame update in animate(). While a piece is being dragged, its
+// majorAxis/minorAxis are live-updated via updateOrbitForDrag (see
+// onPointerMove) — so this always renders the piece's actual, current
+// orbit, which stays a true ellipse, just resized/reoriented, rather
+// than a one-off distorted overlay.
+function buildOrbitPathGeometry(orbit) {
+  const segments = 128;
+  const points = [];
+  for (let i = 0; i <= segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    points.push(new THREE.Vector3()
+      .addScaledVector(orbit.majorAxis, Math.cos(a))
+      .addScaledVector(orbit.minorAxis, Math.sin(a)));
+  }
+  return new THREE.BufferGeometry().setFromPoints(points);
+}
+
+const orbitPathMaterial = new THREE.LineDashedMaterial({
+  color: 0xffffff, dashSize: 1.4, gapSize: 1, transparent: true, opacity: 0.55, depthWrite: false,
+});
+const orbitPathLine = new THREE.Line(
+  buildOrbitPathGeometry({ majorAxis: new THREE.Vector3(1, 0, 0), minorAxis: new THREE.Vector3(0, 1, 0) }),
+  orbitPathMaterial,
+);
+orbitPathLine.computeLineDistances();
+orbitPathLine.visible = false;
+scene.add(orbitPathLine);
+
+// This build of three.js's LineDashedMaterial has no dashOffset uniform —
+// its dashed shader only reads the 'lineDistance' geometry attribute
+// (vLineDistance = scale * lineDistance) with no per-frame offset input.
+// So animating the dashes means mutating that attribute directly: each
+// frame we add a running, wrapped offset onto the distances computed at
+// geometry-build time (see the dash-crawl block in animate()).
+let orbitPathBaseDistances = null;
+let orbitPathTotalLength = 0;
+let dashProgress = 0;
+
+function setOrbitPathGeometry(orbit) {
+  orbitPathLine.geometry.dispose();
+  orbitPathLine.geometry = buildOrbitPathGeometry(orbit);
+  orbitPathLine.computeLineDistances();
+  orbitPathBaseDistances = orbitPathLine.geometry.attributes.lineDistance.array.slice();
+  orbitPathTotalLength = orbitPathBaseDistances[orbitPathBaseDistances.length - 1];
+  dashProgress = 0;
+}
+
+// Picks a unit vector perpendicular to dir — used as a fallback minor-axis
+// direction on the rare frame where the old minorAxis collapses onto the
+// new majorAxis (its orthogonalized remainder is ~zero length).
+function pickPerpendicular(dir) {
+  const helper = Math.abs(dir.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  return helper.clone().addScaledVector(dir, -helper.dot(dir)).normalize();
+}
+
+// Dragging a piece has three zones, compared against the ellipse's CURRENT
+// (raw) major/minor vertex lengths:
+//   - Beyond the major vertex (dist > majorLen): the drag position becomes
+//     the new major vertex — both direction and length reorient, with the
+//     minor axis re-orthogonalized via Gram-Schmidt so it stays
+//     perpendicular, sized using orbit.eccentricity (see below).
+//   - Inside the minor vertex (dist < minorLen): symmetric — the drag
+//     position becomes the new minor vertex.
+//   - In between (minorLen <= dist <= majorLen): the major vertex's
+//     LENGTH shrinks to match dist, but its direction is left alone —
+//     just a live resize, no reorientation. This also keeps the ellipse
+//     mutable from drag to drag: without it, one big outward drag could
+//     inflate majorLen permanently, after which a smaller drag in a
+//     different direction would never exceed that stale length and would
+//     rubber-band in place. The live resize instead continuously pulls
+//     majorLen back down toward whatever the piece is actually at, so a
+//     later outward drag in a new direction can readily exceed it again.
+// Both reorientation branches size the other axis using orbit.eccentricity
+// — the ratio fixed once at creation — rather than recomputing minorLen/
+// majorLen from the live axes. Recomputing it live would create a one-way
+// ratchet toward a circle: the middle zone's live resize only ever shrinks
+// majorLen toward minorLen (never the reverse), so a ratio derived from
+// the live axes only ever drifts toward 1 and can never recover, and once
+// reorientation bakes a near-1 ratio into a fresh ellipse, every later
+// reorientation just perpetuates it — the shape gets permanently stuck
+// circular. Reading the fixed, original eccentricity here instead means
+// every full reorientation snaps back to the piece's authored proportions,
+// no matter how the middle zone has been distorting it in between.
+// Phase is recomputed every drag frame by projecting the drag position
+// onto the (possibly just-updated) basis, so the piece always resumes
+// exactly from where it's being dragged.
+function updateOrbitForDrag(orbit, dragPos) {
+  const dist = dragPos.length();
+
+  if (dist > 1e-4) {
+    const majorLen = orbit.majorAxis.length();
+    const minorLen = orbit.minorAxis.length();
+
+    if (dist > majorLen) {
+      const newMajorDir = dragPos.clone().normalize();
+      let newMinorDir = orbit.minorAxis.clone().normalize();
+      newMinorDir.addScaledVector(newMajorDir, -newMinorDir.dot(newMajorDir));
+      if (newMinorDir.lengthSq() < 1e-6) {
+        newMinorDir = pickPerpendicular(newMajorDir);
+      } else {
+        newMinorDir.normalize();
+      }
+      orbit.majorAxis.copy(dragPos);
+      orbit.minorAxis.copy(newMinorDir).multiplyScalar(dist * orbit.eccentricity);
+    } else if (dist < minorLen) {
+      const newMinorDir = dragPos.clone().normalize();
+      let newMajorDir = orbit.majorAxis.clone().normalize();
+      newMajorDir.addScaledVector(newMinorDir, -newMajorDir.dot(newMinorDir));
+      if (newMajorDir.lengthSq() < 1e-6) {
+        newMajorDir = pickPerpendicular(newMinorDir);
+      } else {
+        newMajorDir.normalize();
+      }
+      orbit.minorAxis.copy(dragPos);
+      orbit.majorAxis.copy(newMajorDir).multiplyScalar(dist / orbit.eccentricity);
+    } else {
+      orbit.majorAxis.setLength(dist);
+    }
+  }
+
+  const majorDir = orbit.majorAxis.clone().normalize();
+  const minorDir = orbit.minorAxis.clone().normalize();
+  const u = dragPos.dot(majorDir) / orbit.majorAxis.length();
+  const v = dragPos.dot(minorDir) / orbit.minorAxis.length();
+  orbit.phase = Math.atan2(v, u);
+}
+
+let hoveredPieceIndex = null;
+function setHoveredPiece(idx) {
+  if (idx === hoveredPieceIndex) return;
+  hoveredPieceIndex = idx;
+  if (idx === null) {
+    orbitPathLine.visible = false;
+    return;
+  }
+  const piece = pieces[idx];
+  setOrbitPathGeometry(piece.orbit);
+  orbitPathMaterial.color.setHex(colorFor(piece.colorKey, theme));
+  orbitPathLine.visible = true;
+}
+
+function applyTheme(name) {
+  theme = name;
+  renderer.setClearColor(THEME[name].clear);
+  pieces.forEach(p => {
+    const hex = colorFor(p.colorKey, name);
+    p.fillMaterial.color.setHex(hex);
+    p.edgeMaterial.color.setHex(hex);
+    // Dark keeps the faint, translucent wireframe look; light makes the
+    // solids fully opaque instead.
+    p.fillMaterial.opacity = name === 'light' ? 1 : p.dimFillOpacity;
+  });
+}
+applyTheme('dark');
+
+// ── DAY/NIGHT TRANSITION ─────────────────────────────────────────────
+// Clicking the logo or tapping the 3D sun doesn't flip the theme
+// instantly: the logo's icon sinks below its own wordmark — its horizon —
+// and fades out there. Its own crossfade (data-logo-theme) flips right
+// then, so it rises back already showing the new mark, in front of
+// everything below.
+//
+// The rest of the page (the 3D solids and the canvas/text underneath
+// them) is a separate layer, clipped by an irregular, continuously
+// wobbling blob — meant to read like a layer of viscous fluid draining
+// or bubbling, not a clean circle. That blob sits behind the logo but in
+// front of nothing else: solids and text stay fully visible in their old
+// colors right up until the blob's boundary passes their position, then
+// disappear. Either way, the page stays fully black through the hidden
+// logo and its rise, and only starts reappearing once risen — the same
+// blob now growing back from nothing, revealing each solid and text
+// element the instant it's been recolored to the new theme, so nothing
+// ever flashes the wrong color mid-reveal.
+//
+// The whole sequence is written as one async function, phase by phase.
+// A debugging aid (the ▶ button, bottom-left) can gate the dark→light
+// direction specifically: debugGate() pauses there until it's clicked,
+// so each phase's end state can be inspected before moving on. It's a
+// no-op for the other direction.
+let themeTransitioning = false;
+let pendingTheme = null;
+
+function waitForProceed() {
+  return new Promise(resolve => {
+    window.addEventListener('debug:proceed', resolve, { once: true });
+  });
+}
+document.getElementById('debug-proceed').addEventListener('click', () => {
+  window.dispatchEvent(new CustomEvent('debug:proceed'));
+});
+
+const DEBUG_PHASE_NAMES = ['Sink', 'Rise', 'Reveal', 'Finalize'];
+const debugPhaseLabel = document.getElementById('debug-phase-label');
+
+async function debugGate(index) {
+  // Gating disabled and the button hidden — restore the block below to
+  // resume stepping through phases one at a time.
+  // const name = DEBUG_PHASE_NAMES[index - 1];
+  // debugPhaseLabel.textContent = `${name} ${index}/${DEBUG_PHASE_NAMES.length}`;
+  // console.log('[debug] paused after:', name);
+  // await waitForProceed();
+  // console.log('[debug] proceeding —', name);
+}
+
+// Generic rAF-driven tween — the logo icon/wordmark are Three.js objects
+// now, not DOM elements with CSS transitions to await transitionend on.
+function tween(durationMs, ease, onUpdate) {
+  return new Promise(resolve => {
+    const start = performance.now();
+    function frame(now) {
+      const t = Math.min(1, (now - start) / durationMs);
+      onUpdate(ease(t));
+      if (t < 1) { requestAnimationFrame(frame); return; }
+      resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+const smoothstep = t => t * t * (3 - 2 * t);
+
+// Sink: the icon drops and fades out together — "sinks below its own
+// wordmark — its horizon — and fades out there" — over the same ~798ms
+// the old CSS transform transition used. Rise is the mirror image,
+// fading in whichever mesh matches targetTheme as it climbs back to
+// rest, so it arrives already showing the new mark (no separate crossfade
+// step needed — the fade IS the rise now).
+const ICON_SINK_MS = 798;
+function sinkLogoIcon() {
+  logoIconBusy = true;
+  const fadeMesh = theme === 'dark' ? iconMeshReversed : iconMeshPrimary;
+  const fromOpacity = fadeMesh.material.opacity;
+  return tween(ICON_SINK_MS, smoothstep, e => {
+    logoIconGroup.position.y = iconCenterY - e * iconH * 1.6;
+    fadeMesh.material.opacity = fromOpacity * (1 - e);
+  });
+}
+function riseLogoIcon(targetTheme) {
+  const showMesh = targetTheme === 'dark' ? iconMeshReversed : iconMeshPrimary;
+  const hideMesh = targetTheme === 'dark' ? iconMeshPrimary : iconMeshReversed;
+  hideMesh.material.opacity = 0;
+  showMesh.material.opacity = 0;
+  return tween(ICON_SINK_MS, smoothstep, e => {
+    logoIconGroup.position.y = iconCenterY - (1 - e) * iconH * 1.6;
+    showMesh.material.opacity = e;
+  }).then(() => { logoIconBusy = false; });
+}
+
+async function beginThemeTransition() {
+  if (themeTransitioning) return;
+  themeTransitioning = true;
+  pendingTheme = theme === 'dark' ? 'light' : 'dark';
+
+  // Phase 1 — sink: the icon sinks below its horizon while the blob
+  // (sinkVoid) collapses in step, taking the solids/text with it.
+  await Promise.all([
+    sinkLogoIcon(),
+    sinkVoid(pendingTheme === 'dark' ? 'toDark' : 'toLight'),
+  ]);
+  await debugGate(1);
+
+  // Phase 2 — rise: the icon's crossfade flips as part of the same rise
+  // tween, so it climbs back already showing the new mark. Going dark,
+  // the real background/theme also switches right now, while everything
+  // else is still clip-path-hidden — see the comment where THEME.dark is
+  // read.
+  if (pendingTheme === 'dark') {
+    theme = 'dark';
+    renderer.setClearColor(THEME.dark.clear);
+    root.setAttribute('data-theme', 'dark');
+  }
+  await riseLogoIcon(pendingTheme);
+  await debugGate(2);
+
+  // Phase 3 — reveal: the blob regrows, recoloring and un-hiding each
+  // solid/text element exactly as its boundary reaches them. Dark pairs
+  // this with the sonar ping; light paints its own traveling ring.
+  let state;
+  if (pendingTheme === 'dark') {
+    playSonar();
+    state = await sweepFromSonar(pendingTheme);
+  } else {
+    state = await playRipple(pendingTheme);
+  }
+  await debugGate(3);
+
+  // Phase 4 — finalize: the actual background/theme flip (a no-op by now
+  // for dark, since phase 2 already did it) and cleanup of every
+  // inline override this sequence used.
+  finishSweep(state, pendingTheme);
+  await debugGate(4);
+
+  themeTransitioning = false;
+}
+
+// Builds the wobbling blob's own path data (no clip-path() wrapper yet —
+// callers combine it differently depending on whether content should be
+// visible inside or outside the shape).
+function blobPathData(radius, cx, cy, t) {
+  const points = 28;
+  const coords = [];
+  for (let i = 0; i < points; i++) {
+    const angle = (i / points) * Math.PI * 2;
+    const wobble = 1
+      + 0.07 * Math.sin(angle * 3 + t * 0.00276)
+      + 0.05 * Math.sin(angle * 5 - t * 0.00207)
+      + 0.03 * Math.sin(angle * 8 + t * 0.00414);
+    const r = Math.max(0, radius * wobble);
+    coords.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r]);
+  }
+  // Smooth closed contour through midpoints (quadratic curves) rather
+  // than a faceted polygon — no straight edges anywhere on the boundary.
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const first = mid(coords[coords.length - 1], coords[0]);
+  let d = `M ${first[0].toFixed(1)} ${first[1].toFixed(1)} `;
+  for (let i = 0; i < points; i++) {
+    const next = coords[(i + 1) % points];
+    const m = mid(coords[i], next);
+    d += `Q ${coords[i][0].toFixed(1)} ${coords[i][1].toFixed(1)} ${m[0].toFixed(1)} ${m[1].toFixed(1)} `;
+  }
+  return `${d}Z`;
+}
+
+// clip-path coordinates are relative to the element's own border-box, not
+// the viewport — so every target's blob has to be re-expressed in its own
+// local space from the shared viewport-space center. Content shows only
+// inside the blob; outside it, the element is clipped away entirely.
+function clipShapeFor(el, radius, cx, cy, t) {
+  const rect = el.getBoundingClientRect();
+  const blob = blobPathData(radius, cx - rect.left, cy - rect.top, t);
+  return `path('${blob}')`;
+}
+
+// The wordmark is a 3D plane now (see LOGO 3D setup), not a clippable DOM
+// element, so it's handled separately — sinkVoid toggles its visibility
+// by comparing the shrinking radius to its own (fixed) screen distance
+// from center, the same threshold check sweepAtRadius already does for
+// solids, and its reveal is a distinct custom fade in finishSweep (see
+// there), same as before this conversion.
+const VOID_TARGET_IDS = () => [
+  document.getElementById('scene'),
+  document.querySelector('.overlay'),
+  document.getElementById('hint'),
+];
+
+// Both directions sink the same way: a blob spanning just past the
+// viewport shrinks in toward the logo, and solids/text are only visible
+// inside it — so each one goes invisible the instant the shrinking
+// boundary sweeps past its position, outside-in, not all at once.
+const logoWordmarkProjected = new THREE.Vector3();
+function sinkVoid(direction) {
+  return new Promise(resolve => {
+    const targets = VOID_TARGET_IDS();
+    const w = window.innerWidth, h = window.innerHeight;
+    const cx = w / 2, cy = h / 2;
+    // Fixed for the duration of this phase — the wordmark plane doesn't
+    // move — so it's cheap to project once rather than every frame.
+    logoWordmarkProjected.set(0, wordmarkCenterY, 0).project(camera);
+    const wordmarkX = (logoWordmarkProjected.x * 0.5 + 0.5) * w;
+    const wordmarkY = (-logoWordmarkProjected.y * 0.5 + 0.5) * h;
+    const wordmarkDistance = Math.hypot(wordmarkX - cx, wordmarkY - cy);
+    // "Just beyond the viewport" needs a little headroom beyond the
+    // corner distance (hypot(w,h)/2) — orbits are bounded close to the
+    // viewport edge (see randomOrbitShape), so a solid can sit near that
+    // corner distance right as this phase starts, and too slim a margin
+    // has the shrinking boundary land right on top of it instantly. But
+    // the margin has to stay modest: it scales the SAME corner distance
+    // regardless of aspect, and on a narrow/tall viewport that distance
+    // is already inflated by the tall side while solids' actual reach is
+    // capped by the (much smaller) width — so a big multiplier there burns
+    // a large chunk of the fixed animation duration on an "invisible"
+    // shrink no solid was ever near, compressing the real sweep into
+    // what's left and making it read as an abrupt pop instead.
+    const maxRadius = Math.hypot(w, h) / 2 * 1.03;
+    const duration = 798;
+    const start = performance.now();
+    const fill = document.getElementById('fx-stroke-fill');
+
+    document.body.style.background = BG_HEX.dark;
+
+    function frame(now) {
+      const elapsed = now - start;
+      const t = Math.min(1, elapsed / duration);
+      const eased = t * t * (3 - 2 * t);
+      const radius = maxRadius * (1 - eased);
+      targets.forEach(el => { el.style.clipPath = clipShapeFor(el, radius, cx, cy, elapsed); });
+      logoWordmarkGroup.visible = radius >= wordmarkDistance;
+
+      // toLight additionally paints the ALREADY-swallowed region (outside
+      // the shrinking blob) solid black, with an evenodd hole punched out
+      // at the blob itself — the mirror of the reveal phase's full-rect-
+      // minus-blob fill. #fx-stroke-fill sits above #scene (z-index 4 vs
+      // 0), so filling just the raw blob (solid INSIDE, no hole) here was
+      // the bug: it painted over the still-visible, not-yet-clipped
+      // solids the instant this phase started, regardless of how far the
+      // boundary had actually shrunk. The evenodd cutout leaves that
+      // still-visible region transparent, so #scene's own content —
+      // already correctly gated by the matching clip-path above — shows
+      // through until the boundary genuinely reaches it. toDark has no
+      // decorative fill of its own here (the sun/paint-ring flourish
+      // comes later, on the reveal).
+      if (direction === 'toLight') {
+        fill.setAttribute('d', `M0 0 H${w} V${h} H0 Z ${blobPathData(radius, cx, cy, elapsed)}`);
+      }
+
+      if (t < 1) { requestAnimationFrame(frame); return; }
+      resolve(); // holds at this final (fully swallowed) frame until the reveal takes over
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+function playSonar() {
+  const layer = document.getElementById('fx-sonar');
+  layer.innerHTML = '';
+  for (let i = 0; i < 3; i++) {
+    const ring = document.createElement('div');
+    ring.className = 'sonar-ring';
+    ring.style.borderColor = INK_HEX[pendingTheme];
+    layer.appendChild(ring);
+    ring.animate(
+      [
+        { transform: 'translate(-50%,-50%) scale(0)', opacity: 0.85 },
+        { transform: 'translate(-50%,-50%) scale(1)', opacity: 0 },
+      ],
+      { duration: 1450, delay: i * 203, easing: 'ease-out', fill: 'forwards' },
+    );
+  }
+  setTimeout(() => { layer.innerHTML = ''; }, 1450 + 2 * 203 + 73);
+}
+
+// ── SHARED SWEEP MECHANICS ───────────────────────────────────────────
+// Both directions recolor solids and text, and regrow the same blob to
+// reveal them, the instant an expanding radius (in screen px from
+// viewport center) reaches them — light's radius is also painted as a
+// visible ring on top; dark's is paired with the sonar ping instead.
+function buildSweepTargets() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const cx = w / 2, cy = h / 2;
+  const domTargets = [
+    { el: document.querySelector('h1'), hexMap: INK_HEX },
+    { el: document.querySelector('.sub'), hexMap: MUTED_HEX },
+    { el: document.querySelector('.contact'), hexMap: TEAL_HEX },
+    { el: document.getElementById('hint'), hexMap: HINT_HEX },
+  ].map(t => {
+    const r = t.el.getBoundingClientRect();
+    const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
+    return { ...t, distance: Math.hypot(dx, dy), done: false };
+  });
+  const pieceTargets = pieces.map(p => ({ piece: p, done: false }));
+  // The wordmark deliberately isn't here (and isn't in VOID_TARGET_IDS at
+  // all) — it doesn't hard-clip-reveal alongside the scene/text like
+  // everything else; it stays hidden through the whole reveal animation
+  // and gets its own slow opacity fade-in afterward, in finishSweep.
+  const clipTargets = VOID_TARGET_IDS();
+  return { cx, cy, maxRadius: Math.hypot(w, h) / 2, domTargets, pieceTargets, clipTargets };
+}
+
+const sweepProjected = new THREE.Vector3();
+function sweepAtRadius(state, radius, targetTheme) {
+  state.pieceTargets.forEach(pt => {
+    if (pt.done) return;
+    sweepProjected.copy(pt.piece.mesh.position).project(camera);
+    const sx = (sweepProjected.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (-sweepProjected.y * 0.5 + 0.5) * window.innerHeight;
+    if (radius >= Math.hypot(sx - state.cx, sy - state.cy)) {
+      pt.done = true;
+      const hex = colorFor(pt.piece.colorKey, targetTheme);
+      pt.piece.fillMaterial.color.setHex(hex);
+      pt.piece.edgeMaterial.color.setHex(hex);
+      pt.piece.fillMaterial.opacity = targetTheme === 'light' ? 1 : pt.piece.dimFillOpacity;
+    }
+  });
+  state.domTargets.forEach(dt => {
+    if (!dt.done && radius >= dt.distance) {
+      dt.done = true;
+      dt.el.style.color = dt.hexMap[targetTheme];
+    }
+  });
+  const now = performance.now();
+  state.clipTargets.forEach(el => {
+    el.style.clipPath = clipShapeFor(el, radius, state.cx, state.cy, now);
+  });
+
+  // Dark's reveal traces its growing boundary with a neon stroke — light's
+  // doesn't (it already has the paint ring for that job). The black fill
+  // covers the full viewport minus the blob itself (an evenodd hole), so
+  // it reinforces the void everywhere the blob hasn't reached yet.
+  if (targetTheme === 'dark') {
+    const w = window.innerWidth, h = window.innerHeight;
+    const blob = blobPathData(radius, state.cx, state.cy, now);
+    document.getElementById('fx-stroke-fill').setAttribute('d', `M0 0 H${w} V${h} H0 Z ${blob}`);
+    document.getElementById('fx-stroke-line').setAttribute('d', blob);
+  }
+}
+
+// Builds enough giant-wordmark rows, stacked vertically, to cover the
+// full viewport height — measuring one row's actual (already-stretched)
+// rendered height first, rather than guessing a fixed count, so it holds
+// up across different viewport sizes. Alternating rows drift in opposite
+// directions ( -> <- -> ... ), tagged via a data attribute read later in
+// finishSweep.
+let giantWordmarkRows = null;
+window.addEventListener('resize', () => { giantWordmarkRows = null; });
+
+// Vertical spacing between rows is a fraction of each row's own rendered
+// height — under 1 packs them tighter (some overlap) than their natural
+// line height would. Horizontal stagger and drift are separate: stagger
+// is each row's fixed resting offset (alternating left/right), already
+// in place the instant it blips in; drift is how much further it travels
+// in that SAME direction as it fades out.
+const ROW_SPACING_FACTOR = 0.65;
+const GIANT_WORDMARK_STAGGER_VW = 6; // extra zigzag on top of the overflow-clearing shift below
+const GIANT_WORDMARK_DRIFT_VW = 20;
+
+function buildGiantWordmarkRows() {
+  const stack = document.getElementById('giant-wordmark-stack');
+  stack.innerHTML = '';
+
+  const probe = document.createElement('div');
+  probe.className = 'giant-wordmark-row';
+  probe.textContent = 'UY WEB STUDIO';
+  probe.style.transform = 'translate(-50%,-50%) scaleY(2)';
+  stack.appendChild(probe);
+  const rowHeight = probe.getBoundingClientRect().height || 1;
+  const rowWidth = probe.getBoundingClientRect().width || 1;
+  stack.removeChild(probe);
+
+  // At 18vw the full "UY WEB STUDIO" is wider than most viewports, so a
+  // perfectly centered row only ever shows its middle slice — "Y WEB
+  // STUD" — clipping "UY" and "IO" off both ends identically every time.
+  // staggerVw is calibrated to how much the text actually overflows
+  // (half the excess width, in vw) plus a little extra zigzag, so rows
+  // shifted toward +staggerVw clear enough to actually show "UY", and
+  // rows shifted the other way show "...STUDIO" instead — variety across
+  // rows rather than every row cropping the same way.
+  const overflowVw = Math.max(0, (rowWidth - window.innerWidth) / window.innerWidth * 50);
+  const staggerVw = GIANT_WORDMARK_STAGGER_VW + overflowVw;
+
+  const rowSpacing = rowHeight * ROW_SPACING_FACTOR;
+  const rowCount = Math.ceil(window.innerHeight / rowSpacing) + 2;
+  const centerIndex = Math.floor(rowCount / 2);
+  const rows = [];
+  for (let i = 0; i < rowCount; i++) {
+    const row = document.createElement('div');
+    row.className = 'giant-wordmark-row';
+    row.textContent = 'UY WEB STUDIO';
+    row.dataset.offsetY = (i - centerIndex) * rowSpacing;
+    const sign = i % 2 === 0 ? 1 : -1; // -> <- -> ...
+    row.dataset.driftSign = sign;
+    row.dataset.offsetX = sign * staggerVw;
+    stack.appendChild(row);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function getGiantWordmarkRows() {
+  if (!giantWordmarkRows) giantWordmarkRows = buildGiantWordmarkRows();
+  return giantWordmarkRows;
+}
+
+function finishSweep(state, targetTheme) {
+  theme = targetTheme;
+  renderer.setClearColor(THEME[targetTheme].clear);
+  root.setAttribute('data-theme', targetTheme);
+  state.domTargets.forEach(dt => { dt.el.style.color = ''; });
+  state.clipTargets.forEach(el => { el.style.clipPath = ''; });
+  document.body.style.background = '';
+
+  // The fill is a no-op at full radius already (the hole matches the
+  // whole viewport), so it can clear instantly — but the glowing line is
+  // still a large, very visible ring at that point, so it dissolves
+  // instead of snapping away.
+  document.getElementById('fx-stroke-fill').setAttribute('d', '');
+  const line = document.getElementById('fx-stroke-line');
+  line.style.opacity = '0';
+  setTimeout(() => {
+    line.setAttribute('d', '');
+    line.style.opacity = '';
+  }, 580);
+
+  // The wordmark plane was never part of the hard-clip reveal above —
+  // it's stayed invisible (logoWordmarkGroup.visible = false, set back
+  // in sinkVoid) this whole time. Show it now and fade in the correct
+  // theme's mesh over the same duration the old DOM version used for its
+  // blur+fade. Three.js has no cheap per-mesh blur (no custom render
+  // pass here), so this simplifies to an opacity-only "materialize,"
+  // dropping the blur nuance the CSS version had.
+  logoWordmarkGroup.visible = true;
+  const wordmarkShowMesh = targetTheme === 'dark' ? wordmarkMeshReversed : wordmarkMeshPrimary;
+  const wordmarkHideMesh = targetTheme === 'dark' ? wordmarkMeshPrimary : wordmarkMeshReversed;
+  wordmarkHideMesh.material.opacity = 0;
+  wordmarkShowMesh.material.opacity = 0;
+  tween(1600, t => t, e => { wordmarkShowMesh.material.opacity = e; });
+
+  // A stack of large echoes of the same text blips into view at 90%
+  // opacity, row by row filling the screen — instantly, not eased —
+  // then all slowly fade out while drifting, alternating rows opposite
+  // directions. Same forced-reflow trick, but in reverse: disable the
+  // transition for the instant "blip" in (at each row's resting
+  // position), then re-enable it only for the slow fade-out + drift.
+  // One reflow read covers the whole batch, not one per row.
+  //
+  // Going dark specifically, --ink is already the DARK theme's bright,
+  // near-white value by the time this runs (the flip happens back in
+  // phase 2) — that instant, 90%-opacity, 18vw blip in that color against
+  // an already-dark background reads as a flashbang. Overriding to a
+  // darker grey just for that direction avoids it; light keeps the
+  // normal --ink (dark text on the light background it's revealing onto,
+  // no flash risk there).
+  const rows = getGiantWordmarkRows();
+  rows.forEach(row => {
+    row.style.transition = 'none';
+    row.style.opacity = '0.9';
+    row.style.color = targetTheme === 'dark' ? '#3a3226' : '';
+    row.style.transform = `translate(calc(-50% + ${row.dataset.offsetX}vw), calc(-50% + ${row.dataset.offsetY}px)) scaleY(2)`;
+  });
+  rows[0].offsetHeight; // eslint-disable-line no-unused-expressions
+  rows.forEach(row => {
+    const sign = row.dataset.driftSign;
+    row.style.transition = '';
+    row.style.opacity = '0';
+    row.style.transform = `translate(calc(-50% + ${Number(row.dataset.offsetX) + sign * GIANT_WORDMARK_DRIFT_VW}vw), calc(-50% + ${row.dataset.offsetY}px)) scaleY(2)`;
+  });
+}
+
+// Dark: no visible mask ring of its own — the sonar ping is the visual,
+// this just mirrors its timing to drive the actual recolor + reveal.
+// Resolves with the sweep state; finishSweep (the real theme flip) is
+// left to the caller, so it can be gated separately.
+function sweepFromSonar(targetTheme) {
+  return new Promise(resolve => {
+    const state = buildSweepTargets();
+    const duration = 1450;
+    const start = performance.now();
+    function frame(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      sweepAtRadius(state, eased * state.maxRadius, targetTheme);
+      if (t < 1) { requestAnimationFrame(frame); return; }
+      resolve(state);
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+// Light: a second, distinct blob — solid white, always a little ahead of
+// the element-reveal boundary — paints the background itself (behind the
+// canvas) while the element-reveal blob separately un-hides each solid
+// and text element. The real background/theme flip happens right at the
+// start here too (mirroring how dark already flips early), so the paint
+// blob and the canvas are showing the correct color from frame one — by
+// the time Phase 4 runs, there's nothing left for it to change.
+const RING_THICKNESS = 110;
+const PAINT_LEAD = 150;
+
+function playRipple(targetTheme) {
+  return new Promise(resolve => {
+    // Release the sink phase's held decorative fill (toLight leaves it
+    // covering everything) — this phase reveals through its own paint
+    // blob and content clip-paths instead.
+    document.getElementById('fx-stroke-fill').setAttribute('d', '');
+
+    theme = targetTheme;
+    renderer.setClearColor(THEME[targetTheme].clear);
+    root.setAttribute('data-theme', targetTheme);
+
+    const paint = document.getElementById('fx-paint');
+    paint.style.background = BG_HEX[targetTheme];
+    const revealLine = document.getElementById('fx-reveal-line');
+
+    const state = buildSweepTargets();
+    const duration = 1305;
+    const start = performance.now();
+
+    function frame(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const outer = eased * (state.maxRadius + RING_THICKNESS);
+
+      const paintRadius = outer + PAINT_LEAD;
+      paint.style.clipPath = `path('${blobPathData(paintRadius, state.cx, state.cy, now)}')`;
+      // A thick, flatly solid outline traces the actual element-reveal
+      // boundary (not the paint blob's leading edge) — the opposite of
+      // dark's thinner, glowing line.
+      revealLine.setAttribute('d', blobPathData(outer, state.cx, state.cy, now));
+
+      sweepAtRadius(state, outer, targetTheme);
+
+      if (t < 1) {
+        requestAnimationFrame(frame);
+        return;
+      }
+
+      paint.style.clipPath = '';
+      paint.style.background = '';
+      revealLine.style.opacity = '0';
+      setTimeout(() => {
+        revealLine.setAttribute('d', '');
+        revealLine.style.opacity = '';
+      }, 580);
+      resolve(state);
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+document.querySelector('.logo-center').addEventListener('click', beginThemeTransition);
+
+// ── DRAG / CLICK INTERACTION (pointer events: mouse + touch) ────────
+// A drag carries a piece off its ring; on release it re-locks onto that
+// same ring at the angle where you let go. A tap/click on the sun piece
+// — one that ends near where it started — starts the day/night transition.
+let selected = null;
+let isDragging = false;
+const previousPointer = new THREE.Vector2();
+const downScreen = new THREE.Vector2();
+const lastScreen = new THREE.Vector2();
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+const dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const intersection = new THREE.Vector3();
+const offset = new THREE.Vector3();
+
+function setPointerFromEvent(e) {
+  pointerNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointerNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  lastScreen.set(e.clientX, e.clientY);
+}
+
+function pickPiece() {
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(pieceMeshes, false);
+  return hits.length ? pieceMeshes.indexOf(hits[0].object) : null;
+}
+
+function onPointerDown(e) {
+  setPointerFromEvent(e);
+  previousPointer.copy(pointerNDC);
+  downScreen.copy(lastScreen);
+  const idx = pickPiece();
+  if (idx === null) return;
+
+  selected = idx;
+  isDragging = true;
+  document.body.style.cursor = 'grabbing';
+  setHoveredPiece(idx); // make sure its path is showing (and colored) before the drag starts warping it
+
+  raycaster.setFromCamera(pointerNDC, camera);
+  raycaster.ray.intersectPlane(dragPlane, intersection);
+  offset.copy(intersection).sub(pieces[idx].mesh.position);
+}
+
+function onPointerMove(e) {
+  setPointerFromEvent(e);
+
+  if (isDragging && selected !== null) {
+    const piece = pieces[selected];
+    raycaster.setFromCamera(pointerNDC, camera);
+    raycaster.ray.intersectPlane(dragPlane, intersection);
+    if (!intersection) return;
+
+    piece.mesh.position.copy(intersection.clone().sub(offset));
+
+    const dx = pointerNDC.x - previousPointer.x;
+    const dy = pointerNDC.y - previousPointer.y;
+    const rotSpeed = 3;
+    piece.mesh.rotation.y += dx * rotSpeed;
+    piece.mesh.rotation.x += dy * rotSpeed;
+
+    // The ellipse only reorients once the drag pushes the piece beyond
+    // its current major vertex; within that, the piece just rides the
+    // existing path. See updateOrbitForDrag for the full rule.
+    updateOrbitForDrag(piece.orbit, piece.mesh.position);
+    setOrbitPathGeometry(piece.orbit);
+
+    previousPointer.copy(pointerNDC);
+    return;
+  }
+
+  const idx = pickPiece();
+  document.body.style.cursor = idx === null ? 'default' : (pieces[idx].isToggle ? 'pointer' : 'grab');
+  setHoveredPiece(idx);
+}
+
+function onPointerUp() {
+  if (isDragging && selected !== null) {
+    const piece = pieces[selected];
+
+    if (piece.isToggle && downScreen.distanceTo(lastScreen) < 6) {
+      beginThemeTransition();
+    }
+
+    // phase/majorAxis/minorAxis are already current — updateOrbitForDrag
+    // keeps them in sync every drag frame — so just make sure the
+    // displayed path matches the final orbit shape.
+    setOrbitPathGeometry(piece.orbit);
+  }
+  isDragging = false;
+  selected = null;
+  document.body.style.cursor = 'default';
+}
+
+window.addEventListener('pointerdown', onPointerDown);
+window.addEventListener('pointermove', onPointerMove);
+window.addEventListener('pointerup', onPointerUp);
+window.addEventListener('pointercancel', onPointerUp);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Grain drifts opposite the cursor — a cheap parallax shift rather than
+// regenerating the turbulence itself, which would be expensive per frame.
+const grain = document.getElementById('grain');
+window.addEventListener('pointermove', (e) => {
+  const nx = e.clientX / window.innerWidth - 0.5;
+  const ny = e.clientY / window.innerHeight - 0.5;
+  grain.style.transform = `translate(${nx * -24}px, ${ny * -24}px)`;
+});
+
+// ── SCROLL REACTIVITY ─────────────────────────────────────────────────
+// The page itself never scrolls (html/body are overflow:hidden) — wheel
+// input is purely a signal here, driving the kicker marquee and the
+// solids' orbit speed/direction. Direction and magnitude are tracked
+// separately: direction is just whichever way the most recent wheel
+// event moved, taking effect immediately. Magnitude is a multiplier
+// that starts at 1 (normal speed), gets multiplied by 1.5 on every wheel
+// event regardless of direction (capped at 10, i.e. 1000%), and decays
+// back toward 1 on its own between events — so reversing direction
+// doesn't reset the boost already built up, it only takes another scroll
+// to change it.
+let scrollDirection = 1;
+let velocityMultiplier = 1;
+const VELOCITY_BOOST = 1.5;
+const VELOCITY_MAX = 10;
+const VELOCITY_DECAY_TAU = 1.5; // seconds — roughly how long "slowly" takes
+
+// The h1's subject word cycles one step per wheel event, in scroll
+// direction — same discrete, per-event granularity as the velocity
+// boost above, not a per-frame animation.
+const HERO_WORDS = [
+  'Somethings', 'Arts', 'Experience', 'Visions', 'Voices',
+  'Spaces', 'Cultures', 'Ideas', 'Stories',
+  'Journeys', 'Moments', 'Joy', 'Wonder', 'Intrigue', 'Discovery',
+];
+let heroWordIndex = 0;
+const heroWordEl = document.getElementById('hero-word');
+
+// Shared by both the wheel listener and the touch-swipe listener below —
+// one "tick" of scroll signal, direction-aware, regardless of input type.
+function handleScrollTick(direction) {
+  scrollDirection = direction;
+  velocityMultiplier = Math.min(VELOCITY_MAX, velocityMultiplier * VELOCITY_BOOST);
+  heroWordIndex = (heroWordIndex + direction + HERO_WORDS.length) % HERO_WORDS.length;
+  heroWordEl.textContent = HERO_WORDS[heroWordIndex];
+}
+
+window.addEventListener('wheel', (e) => {
+  handleScrollTick(e.deltaY < 0 ? -1 : 1);
+}, { passive: true });
+
+// Swipe gestures read the same way on mobile — the page still never
+// actually scrolls (html/body stay overflow:hidden), this just derives
+// the same direction/tick signal from finger movement instead of a wheel
+// delta. touchLastY resets per-touch (not per-move), so a single swipe
+// can fire multiple ticks if it covers enough distance, same as a fast
+// flick of a real scroll wheel firing several wheel events in a row.
+let touchLastY = null;
+const TOUCH_TICK_PX = 12; // minimum finger movement per tick — keeps a slow drag from firing constantly
+window.addEventListener('touchstart', (e) => {
+  touchLastY = e.touches[0].clientY;
+}, { passive: true });
+window.addEventListener('touchmove', (e) => {
+  if (touchLastY === null || isDragging) return; // a piece-drag owns this touch instead
+  const y = e.touches[0].clientY;
+  const delta = touchLastY - y; // swiping up reads as scrolling forward, matching a positive wheel deltaY
+  if (Math.abs(delta) < TOUCH_TICK_PX) return;
+  handleScrollTick(delta < 0 ? -1 : 1);
+  touchLastY = y;
+}, { passive: true });
+window.addEventListener('touchend', () => { touchLastY = null; }, { passive: true });
+
+// ── KICKER MARQUEE ────────────────────────────────────────────────────
+// Alternates between the two kicker items. The repeat unit for the
+// seamless-loop math is one full CYCLE through both items (not just one
+// item) — measured once via a hidden probe — since that's the actual
+// repeating period once they alternate; wrapping on a single item's
+// width would desync the offset from the pattern mid-cycle.
+const KICKER_ITEMS = ['Coming Soon', 'STOCKTON 08.2026'];
+const KICKER_SEP = '  •  ';
+const KICKER_REPEATS = 16;
+const kickerTrack = document.getElementById('kicker-track');
+kickerTrack.textContent = Array.from(
+  { length: KICKER_REPEATS * KICKER_ITEMS.length },
+  (_, i) => KICKER_ITEMS[i % KICKER_ITEMS.length],
+).join(KICKER_SEP) + KICKER_SEP;
+
+const kickerProbe = document.createElement('span');
+kickerProbe.className = 'kicker-track';
+kickerProbe.style.cssText = 'position:fixed; visibility:hidden; white-space:nowrap;';
+kickerProbe.textContent = KICKER_ITEMS.join(KICKER_SEP) + KICKER_SEP;
+document.body.appendChild(kickerProbe);
+const kickerUnitWidth = kickerProbe.getBoundingClientRect().width || 100;
+document.body.removeChild(kickerProbe);
+
+let kickerOffset = 0;
+const MARQUEE_BASE_SPEED = 22; // px/sec, idle drift
+
+// ── OVERLAY TEXT WIDTH ───────────────────────────────────────────────
+// The text column under the marquee (h1 + .sub) is normalized to the
+// rendered width of the LONGEST word HERO_WORDS ever cycles the h1's
+// subject through — not just whichever one currently shows — so the
+// column stays a stable width as the word changes on scroll, rather than
+// reflowing every time. Measured live via a hidden probe styled with
+// h1's own computed font, since h1's font-size is a responsive clamp(),
+// not a fixed value a ch unit could track consistently across viewport
+// sizes.
+function updateOverlayTextMaxWidth() {
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:fixed; visibility:hidden; white-space:nowrap;';
+  probe.style.font = getComputedStyle(document.querySelector('h1')).font;
+  document.body.appendChild(probe);
+  const width = HERO_WORDS.reduce((max, word) => {
+    probe.textContent = word;
+    return Math.max(max, probe.getBoundingClientRect().width);
+  }, 0);
+  document.body.removeChild(probe);
+  root.style.setProperty('--overlay-text-max-width', `${width}px`);
+}
+updateOverlayTextMaxWidth();
+window.addEventListener('resize', updateOverlayTextMaxWidth);
+
+// ── ANIMATION LOOP ───────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+
+  // Decay the magnitude boost back toward 1, continuously (frame-rate
+  // independent) rather than a flat per-frame multiply.
+  velocityMultiplier = 1 + (velocityMultiplier - 1) * Math.exp(-dt / VELOCITY_DECAY_TAU);
+
+  pieces.forEach((piece, i) => {
+    piece.mesh.rotation.y += piece.orbit.spin * dt;
+    piece.mesh.rotation.x += piece.orbit.spin * 0.6 * dt;
+
+    if (i === selected) return;
+
+    piece.orbit.phase += piece.orbit.speed * scrollDirection * velocityMultiplier * dt;
+    piece.mesh.position.copy(orbitPosition(piece.orbit));
+  });
+
+  const marqueeSpeed = MARQUEE_BASE_SPEED * scrollDirection * velocityMultiplier;
+  kickerOffset = ((kickerOffset - marqueeSpeed * dt) % kickerUnitWidth + kickerUnitWidth) % kickerUnitWidth;
+  kickerTrack.style.transform = `translateX(${-kickerOffset}px)`;
+
+  if (hoveredPieceIndex !== null && orbitPathTotalLength > 0) {
+    const hovered = pieces[hoveredPieceIndex];
+    const dashSpeed = hovered.orbit.speed * scrollDirection * velocityMultiplier * hovered.orbit.majorAxis.length();
+    dashProgress = ((dashProgress - dashSpeed * dt) % orbitPathTotalLength + orbitPathTotalLength) % orbitPathTotalLength;
+    const distAttr = orbitPathLine.geometry.attributes.lineDistance;
+    for (let i = 0; i < distAttr.array.length; i++) {
+      distAttr.array[i] = orbitPathBaseDistances[i] + dashProgress;
+    }
+    distAttr.needsUpdate = true;
+  }
+
+  // Logo icon hover dip — suspended while sink/rise (logoIconBusy) owns
+  // logoIconGroup's position instead.
+  if (!logoIconBusy) {
+    const dipTarget = logoHovered ? iconCenterY - LOGO_HOVER_DIP : iconCenterY;
+    logoIconGroup.position.y += (dipTarget - logoIconGroup.position.y) * Math.min(1, dt / 0.09);
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── PAGE-LOAD CEREMONY ───────────────────────────────────────────────
+// Once, on first load: the giant-wordmark blip-in-then-fade (normally a
+// theme-toggle flourish, see finishSweep) plays at a slower pace, while
+// the rest of the page — scene, overlay text, logo — resolves out of
+// the blurred/invisible state defined in CSS (:root:not([data-loaded])).
+// Both are driven by the same data-loaded flip so they read as one
+// ceremony rather than two unrelated animations.
+const LOAD_ROW_FADE_MS = 4200; // slower than the 2.5s used on theme toggles
+const LOGO_REVEAL_MS = 2100; // matches the CSS #scene/.overlay/.logo-center transition
+function playLoadCeremony() {
+  if (prefersReducedMotion) {
+    root.setAttribute('data-loaded', 'true');
+    return;
+  }
+
+  // The 3D logo isn't part of the DOM blur-reveal (no cheap per-mesh
+  // blur in Three.js) — just fade its currently-active meshes in from 0
+  // over the same duration, so it resolves into view alongside
+  // everything else instead of popping in sharp immediately.
+  const activeIconMesh = theme === 'dark' ? iconMeshReversed : iconMeshPrimary;
+  const activeWordmarkMesh = theme === 'dark' ? wordmarkMeshReversed : wordmarkMeshPrimary;
+  const iconTargetOpacity = activeIconMesh.material.opacity;
+  const wordmarkTargetOpacity = activeWordmarkMesh.material.opacity;
+  activeIconMesh.material.opacity = 0;
+  activeWordmarkMesh.material.opacity = 0;
+  tween(LOGO_REVEAL_MS, t => t, e => {
+    activeIconMesh.material.opacity = e * iconTargetOpacity;
+    activeWordmarkMesh.material.opacity = e * wordmarkTargetOpacity;
+  });
+
+  root.setAttribute('data-loaded', 'true');
+
+  // Blip in instantly (no fade-in — same instant-appearance rule the
+  // theme-toggle version follows), forced reflow, then re-enable
+  // transition at the slower duration for the fade-out + drift.
+  const rows = getGiantWordmarkRows();
+  rows.forEach(row => {
+    row.style.transition = 'none';
+    row.style.opacity = '0.9';
+    row.style.transform = `translate(calc(-50% + ${row.dataset.offsetX}vw), calc(-50% + ${row.dataset.offsetY}px)) scaleY(2)`;
+  });
+  rows[0].offsetHeight; // eslint-disable-line no-unused-expressions
+  rows.forEach(row => {
+    const sign = row.dataset.driftSign;
+    row.style.transition = `opacity ${LOAD_ROW_FADE_MS}ms ease, transform ${LOAD_ROW_FADE_MS}ms ease`;
+    row.style.opacity = '0';
+    row.style.transform = `translate(calc(-50% + ${Number(row.dataset.offsetX) + sign * GIANT_WORDMARK_DRIFT_VW}vw), calc(-50% + ${row.dataset.offsetY}px)) scaleY(2)`;
+  });
+  // Hand the rows back to their normal (faster) CSS-defined transition
+  // once this slower one has finished, so a later theme toggle reusing
+  // the same memoized rows isn't stuck at ceremony speed.
+  setTimeout(() => {
+    rows.forEach(row => { row.style.transition = ''; });
+  }, LOAD_ROW_FADE_MS);
+}
+playLoadCeremony();
+</script>
+</body>
+</html>
